@@ -22,8 +22,8 @@ dataset : {
 
 model : {
   NAME: PCP_MAE,
-  group_size: 32,
-  num_group: 64,
+  group_size: 32,          # 与 MiniGPT-3D 一致 (没变)
+  num_group: 512,          # 原64，改512 ★
   loss: cdl2,
   
   # parameters for predicting the centers
@@ -36,15 +36,18 @@ model : {
     mask_ratio: 0.6,  
     mask_type: 'rand',
     trans_dim: 384,
-    encoder_dims: 384,
+    encoder_dims: 256,       # 注意这里是256，不是384！★
     depth: 12,
-    drop_path_rate: 0.1,
+    drop_path_rate: 0.1, # 可根据需要微调
     num_heads: 6,
     decoder_depth: 4,
     decoder_num_heads: 6,
   },
   }
-
+npoints: 8192           # 原1024，改8192 ★
+point_dims: 3           # 新增，默认为xyz，若想加颜色可后续改为6 ★
+cls_dim: 40             # 新增，MiniGPT-3D 默认值 ★
+use_max_pool: false     # 新增，MiniGPT-3D 默认值 ★
 npoints: 1024
 total_bs : 128
 step_per_update : 1
