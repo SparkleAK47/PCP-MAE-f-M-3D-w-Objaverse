@@ -1,5 +1,5 @@
 from utils import registry
-
+from .objaverse_npy import ObjaverseNPY
 
 DATASETS = registry.Registry('dataset')
 

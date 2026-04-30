@@ -13,7 +13,8 @@ import random
 from utils.knn import knn_point
 from extensions.chamfer_dist import ChamferDistanceL1, ChamferDistanceL2
 from models.pos import get_pos_embed
-
+from .pointbert_mg.dvae import Encoder as MG_Encoder, Group as MG_Group
+from .pointbert_mg.misc import fps  # 如果 dvae 的 Group 依赖 fps，需确保可导入
 
 class Encoder(nn.Module):   ## Embedding module
     def __init__(self, encoder_channel):
@@ -332,16 +333,19 @@ class MaskTransformer(nn.Module):
         print_log(f'[args] {config.transformer_config}', logger = 'Transformer')
         # embedding
         self.encoder_dims =  config.transformer_config.encoder_dims
-        self.encoder = Encoder(encoder_channel = self.encoder_dims)
+        # 使用 MiniGPT-3D 的 Encoder (输出 256)
+        self.encoder = MG_Encoder(encoder_channel = self.encoder_dims)
+        # 新增：将 256 维投影到 trans_dim (384) 的线性层
+        self.reduce_dim = nn.Linear(self.encoder_dims, self.trans_dim)
 
         self.mask_type = config.transformer_config.mask_type
         self.mask_pos_token = nn.Parameter(torch.zeros(1, 1, self.trans_dim))
         trunc_normal_(self.mask_pos_token, std=.02)
 
         self.pos_embed = nn.Sequential(
-            nn.Linear(self.trans_dim, self.trans_dim),
+            nn.Linear(3, 128),
             nn.GELU(),
-            nn.Linear(self.trans_dim, self.trans_dim),
+            nn.Linear(128, self.trans_dim)
         )
 
         dpr = [x.item() for x in torch.linspace(0, self.drop_path_rate, self.depth)]
@@ -432,6 +436,7 @@ class MaskTransformer(nn.Module):
                             
         
         group_input_tokens = self.encoder(neighborhood)  #  B G C
+        group_input_tokens = self.reduce_dim(group_input_tokens)   # B G 384
 
         batch_size, seq_len, C = group_input_tokens.size()
 
@@ -440,7 +445,7 @@ class MaskTransformer(nn.Module):
         # add pos embedding
         # mask pos center
         vis_center = center[~bool_masked_pos].reshape(batch_size, -1, 3)
-        pos = self.pos_embed(get_pos_embed(self.trans_dim, vis_center))
+        pos = self.pos_embed(vis_center)  # vis_center: (B, V, 3) -> (B, V, 384)
 
         # transformer
         M = x_mask.shape[1]
@@ -477,7 +482,7 @@ class PCP_MAE(nn.Module):
         )
 
         print_log(f'[PCP_MAE] divide point cloud into G{self.num_group} x S{self.group_size} points ...', logger ='PCP_MAE')
-        self.group_divider = Group(num_group = self.num_group, group_size = self.group_size)
+        self.group_divider = MG_Group(num_group=self.num_group, group_size=self.group_size)
 
         # prediction head
         self.increase_dim = nn.Sequential(

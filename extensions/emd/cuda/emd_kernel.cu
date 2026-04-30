@@ -11,11 +11,22 @@
 
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAApplyUtils.cuh>  // at::cuda::getApplyGrid
-#include <THC/THC.h>
+// #include <THC/THC.h>
+#include <c10/cuda/CUDAStream.h>
+#include <ATen/cuda/CUDAContext.h>
+// 兼容 PyTorch 2.x
+#include <c10/cuda/CUDAException.h>
+
 
 #define CHECK_CUDA(x) TORCH_CHECK(x.type().is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
+
+// 简单替代 CHECK_EQ
+#define CHECK_EQ(X, Y) TORCH_CHECK((X) == (Y), #X " == " #Y " check failed")
+
+// 替代 THCudaCheck
+#define THCudaCheck(err) AT_CUDA_CHECK(err)
 
 
 /********************************
