@@ -334,7 +334,8 @@ class MaskTransformer(nn.Module):
         # embedding
         self.encoder_dims =  config.transformer_config.encoder_dims
         # 使用 MiniGPT-3D 的 Encoder (输出 256)
-        self.encoder = MG_Encoder(encoder_channel = self.encoder_dims)
+        self.encoder = MG_Encoder(encoder_channel = self.encoder_dims,
+                          point_input_dims = getattr(config, 'point_dims', 6))
         # 新增：将 256 维投影到 trans_dim (384) 的线性层
         self.reduce_dim = nn.Linear(self.encoder_dims, self.trans_dim)
 
@@ -570,8 +571,11 @@ class PCP_MAE(nn.Module):
         B, M, C = x_rec.shape
         rebuild_points = self.increase_dim(x_rec.transpose(1, 2)).transpose(1, 2).reshape(B * M, -1, 3)  # B M 1024
 
-        gt_points = neighborhood[mask].reshape(B * M,-1,3)
-        loss1 = self.loss_func(rebuild_points, gt_points)
+        # gt_points = neighborhood[mask].reshape(B * M,-1,3)
+        # loss1 = self.loss_func(rebuild_points, gt_points)
+        # neighborhood 是 (B, G, group_size, 6)，只取坐标部分
+        gt_coords = neighborhood[mask].reshape(B * M, -1, 6)[..., :3].contiguous()
+        loss1 = self.loss_func(rebuild_points, gt_coords)
         
         if vis: #visualization
             vis_points = neighborhood[~mask].reshape(B * (self.num_group - M), -1, 3)

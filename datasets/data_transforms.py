@@ -13,7 +13,8 @@ class PointcloudRotate(object):
                                         [0, 1, 0],
                                         [-sinval, 0, cosval]])
             R = torch.from_numpy(rotation_matrix.astype(np.float32)).to(pc.device)
-            pc[i, :, :] = torch.matmul(pc[i], R)
+            # pc[i, :, :] = torch.matmul(pc[i], R)
+            pc[i, :, 0:3] = torch.matmul(pc[i, :, 0:3], R)
         return pc
 
 class PointcloudScaleAndTranslate(object):

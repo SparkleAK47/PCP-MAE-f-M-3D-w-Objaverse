@@ -13,19 +13,38 @@ scheduler: {
 }}
 
 
-dataset : {
-  train : { _base_: cfgs/dataset_configs/ShapeNet-55.yaml,
-            others: {subset: 'train', npoints: 8192}},
-  val : { _base_: cfgs/dataset_configs/ShapeNet-55.yaml,
-            others: {subset: 'test', npoints: 8192}},
-  test : { _base_: cfgs/dataset_configs/ShapeNet-55.yaml,
-            others: {subset: 'test', npoints: 8192}}}
+# dataset : {
+#   train : { _base_: cfgs/dataset_configs/ShapeNet-55.yaml,
+#             others: {subset: 'train', npoints: 8192}},
+#   val : { _base_: cfgs/dataset_configs/ShapeNet-55.yaml,
+#             others: {subset: 'test', npoints: 8192}},
+#   test : { _base_: cfgs/dataset_configs/ShapeNet-55.yaml,
+#             others: {subset: 'test', npoints: 8192}}}
+dataset:
+  train:
+    _base_: cfgs/dataset_configs/ObjaverseNPY.yaml
+    others:
+      subset: 'train'
+      npoints: 8192
+      bs: 128
+  val:
+    _base_: cfgs/dataset_configs/ObjaverseNPY.yaml
+    others:
+      subset: 'test'
+      npoints: 8192
+      bs: 256
+  test:
+    _base_: cfgs/dataset_configs/ObjaverseNPY.yaml
+    others:
+      subset: 'test'
+      npoints: 8192
+      bs: 128
 
 model: {
   NAME: PCP_MAE,
   group_size: 32,
   num_group: 512,
-  point_dims: 3,
+  point_dims: 6, # minigpt3d dataset has 6 dims (xyz + rgb), while shapenet has 3 dims (xyz)
   cls_dim: 40,
   use_max_pool: false,
   loss: cdl2,

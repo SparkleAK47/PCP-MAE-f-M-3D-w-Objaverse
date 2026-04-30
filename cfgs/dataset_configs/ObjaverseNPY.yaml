@@ -1,0 +1,3 @@
+NAME: ObjaverseNPY
+data_root: /data/workspace/MiniGPT-3D/data/objaverse_data
+npoints: 8192
