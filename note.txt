@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=0 python main.py --config cfgs/pretrain/base.yaml --exp_name pcpmae_minigpt3d

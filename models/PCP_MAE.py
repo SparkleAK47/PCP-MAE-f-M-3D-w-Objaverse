@@ -15,6 +15,7 @@ from extensions.chamfer_dist import ChamferDistanceL1, ChamferDistanceL2
 from models.pos import get_pos_embed
 from .pointbert_mg.dvae import Encoder as MG_Encoder, Group as MG_Group
 from .pointbert_mg.misc import fps  # 如果 dvae 的 Group 依赖 fps，需确保可导入
+from torch.utils.checkpoint import checkpoint
 
 class Encoder(nn.Module):   ## Embedding module
     def __init__(self, encoder_channel):
@@ -308,10 +309,23 @@ class TransformerDecoder(nn.Module):
     def forward(self, x, pos=None, return_token_num=None):
         if pos is None:
             # pred pos decoder
+            # for _, block in enumerate(self.blocks):
+            #     x = block(x)
+            if pos is None:
+                def _forward_blocks(x):
+                    for block in self.blocks:
+                        x = block(x)
+                    return x
+                x = checkpoint(_forward_blocks, x, use_reentrant=False)
+                x = self.head(self.norm(x))
+                return x
+
             for _, block in enumerate(self.blocks):
-                x = block(x)
-            x = self.head(self.norm(x))
-            return x         
+                x = block(x + pos)
+            x = self.head(self.norm(x[:, -return_token_num:]))
+            return x
+            # x = self.head(self.norm(x))
+            # return x         
         for _, block in enumerate(self.blocks):
             x = block(x + pos)
 
@@ -452,7 +466,15 @@ class MaskTransformer(nn.Module):
         M = x_mask.shape[1]
         mask_pos_token = self.mask_pos_token.expand(batch_size, M, self.trans_dim)
         
-        x_vis, x_mask = self.blocks(x_vis, pos, x_mask, mask_pos_token)
+        # x_vis, x_mask = self.blocks(x_vis, pos, x_mask, mask_pos_token)
+        x_vis, x_mask = checkpoint(
+            self.blocks,
+            x_vis,
+            pos,
+            x_mask,
+            mask_pos_token,
+            use_reentrant=False
+        )
         x_vis = self.norm(x_vis)
         x_mask = self.norm(x_mask)
         
@@ -498,12 +520,13 @@ class PCP_MAE(nn.Module):
         # loss
         self.build_loss_func(self.loss)
         
-        self.pred_pos_proj = nn.Sequential( # input B, M, C  
-            nn.Linear(self.trans_dim, self.trans_dim),
-            nn.LayerNorm(self.trans_dim),
-            nn.ReLU(inplace=True),
-            nn.Linear(self.trans_dim, self.trans_dim),
-        )  
+        # self.pred_pos_proj = nn.Sequential( # input B, M, C  
+        #     nn.Linear(self.trans_dim, self.trans_dim),
+        #     nn.LayerNorm(self.trans_dim),
+        #     nn.ReLU(inplace=True),
+        #     nn.Linear(self.trans_dim, self.trans_dim),
+        # )  
+        self.pred_pos_proj = nn.Linear(self.trans_dim, 3)  # 直接预测 3D 坐标
         
         self.pred_loss = config.pred_loss
         if self.config.pred_pos_transformer_layer != 0:
@@ -537,7 +560,8 @@ class PCP_MAE(nn.Module):
             x_mask_without_pos = self.pred_pos_decoder(x_mask_without_pos)
         
         pos_rec = self.pred_pos_proj(x_mask_without_pos) # B, Mask, C -> B, Mask, C
-        gt_pos = get_pos_embed(self.trans_dim, center[mask].reshape(B, -1, 3))
+        # gt_pos = get_pos_embed(self.trans_dim, center[mask].reshape(B, -1, 3))
+        gt_pos = center[mask].reshape(B, -1, 3)   # 直接使用 3D 坐标
         if self.pred_loss == 'l2':
             loss2 = F.mse_loss(pos_rec, gt_pos.detach())    
         elif self.pred_loss == 'sml1':
@@ -553,7 +577,8 @@ class PCP_MAE(nn.Module):
             raise NotImplementedError
         
 
-        pos_emd_vis = self.MAE_encoder.pos_embed(get_pos_embed(self.trans_dim, center[~mask].reshape(B, -1, 3)))
+        # pos_emd_vis = self.MAE_encoder.pos_embed(get_pos_embed(self.trans_dim, center[~mask].reshape(B, -1, 3)))
+        pos_emd_vis = self.MAE_encoder.pos_embed(center[~mask].reshape(B, -1, 3))
         
         if self.add_detach:
             pos_rec = self.MAE_encoder.pos_embed(pos_rec.detach())      
