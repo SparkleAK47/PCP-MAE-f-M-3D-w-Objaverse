@@ -600,7 +600,11 @@ class PCP_MAE(nn.Module):
         # loss1 = self.loss_func(rebuild_points, gt_points)
         # neighborhood 是 (B, G, group_size, 6)，只取坐标部分
         gt_coords = neighborhood[mask].reshape(B * M, -1, 6)[..., :3].contiguous()
-        loss1 = self.loss_func(rebuild_points, gt_coords)
+        # loss1 = self.loss_func(rebuild_points, gt_coords)
+        with torch.no_grad():
+            rebuild_points_fp32 = rebuild_points.float()
+            gt_coords_fp32 = gt_coords.float()
+            loss1 = self.loss_func(rebuild_points_fp32, gt_coords_fp32)
         
         if vis: #visualization
             vis_points = neighborhood[~mask].reshape(B * (self.num_group - M), -1, 3)

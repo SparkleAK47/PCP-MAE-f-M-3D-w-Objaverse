@@ -26,7 +26,7 @@ dataset:
     others:
       subset: 'train'
       npoints: 8192
-      bs: 2
+      bs: 8
   val:
     _base_: cfgs/dataset_configs/ObjaverseNPY.yaml
     others:
@@ -71,5 +71,5 @@ model: {
 
 npoints: 8192
 total_bs : 64
-step_per_update : 32
+step_per_update : 8
 max_epoch : 300

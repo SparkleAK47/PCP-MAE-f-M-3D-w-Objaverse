@@ -13,7 +13,7 @@ import numpy as np
 from torchvision import transforms
 from datasets import data_transforms
 from pointnet2_ops import pointnet2_utils
-
+from torch.cuda.amp import autocast, GradScaler
 
 class Acc_Metric:
     def __init__(self, acc = 0.):
@@ -50,6 +50,7 @@ def run_net(args, config, train_writer=None, val_writer=None):
     (_, extra_train_dataloader)  = builder.dataset_builder(args, config.dataset.extra_train) if config.dataset.get('extra_train') else (None, None)
     # build model
     base_model = builder.model_builder(config.model)
+    scaler = GradScaler(enabled=True)
     if args.use_gpu:
         base_model.to(args.local_rank)
     
@@ -87,7 +88,12 @@ def run_net(args, config, train_writer=None, val_writer=None):
     elif args.start_ckpts is not None:
         builder.load_model(base_model, args.start_ckpts, logger = logger)
     
-    
+    if args.use_gpu:
+        base_model.to(args.local_rank)
+
+    # if hasattr(torch, "compile"):
+    #     base_model = torch.compile(base_model, fullgraph=True, mode="max-autotune")
+
     # DDP
     if args.distributed:
         # Sync BN
@@ -140,21 +146,38 @@ def run_net(args, config, train_writer=None, val_writer=None):
             
             assert points.size(1) == npoints
             
-            points = train_transforms(points)
-            loss1, loss2 = base_model(points)
-            loss = loss1 + loss2    
+            # points = train_transforms(points)
+            # loss1, loss2 = base_model(points)
+            # loss = loss1 + loss2    
             
+            # try:
+            #     loss.backward()
+            #     # print("Using one GPU")
+            # except:
+            #     loss = loss.mean()
+            #     loss.backward()
+            #     # print("Using multi GPUs")
+
+            # if num_iter == config.step_per_update:
+            #     num_iter = 0
+            #     optimizer.step()
+            #     base_model.zero_grad()
+            points = train_transforms(points)
+
+            with autocast(enabled=True):
+                loss1, loss2 = base_model(points)
+                loss = loss1 + loss2
+
             try:
-                loss.backward()
-                # print("Using one GPU")
-            except:
+                scaler.scale(loss).backward()
+            except RuntimeError:
                 loss = loss.mean()
-                loss.backward()
-                # print("Using multi GPUs")
+                scaler.scale(loss).backward()
 
             if num_iter == config.step_per_update:
                 num_iter = 0
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 base_model.zero_grad()
 
             if args.distributed:
@@ -204,9 +227,10 @@ def run_net(args, config, train_writer=None, val_writer=None):
         #         best_metrics = metrics
         #         builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-best', args, logger = logger)
         builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-last', args, logger = logger)
-        if epoch % 25 == 0 and epoch >= 250:
+        if epoch % 10 == 0:
             builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-epoch-{epoch:03d}', args,
                                     logger=logger)
+            # minigpt3d数据集更大，保存频率降低为每10个epoch保存一次
         # if (config.max_epoch - epoch) < 10:
         #     builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-epoch-{epoch:03d}', args, logger = logger)
     if train_writer is not None:

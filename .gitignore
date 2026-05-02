@@ -165,3 +165,6 @@ temp.sh
 data/*
 datasets/*
 !datasets/*.py
+
+# others
+output.txt
