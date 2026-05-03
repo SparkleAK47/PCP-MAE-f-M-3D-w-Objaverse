@@ -526,7 +526,12 @@ class PCP_MAE(nn.Module):
         #     nn.ReLU(inplace=True),
         #     nn.Linear(self.trans_dim, self.trans_dim),
         # )  
-        self.pred_pos_proj = nn.Linear(self.trans_dim, 3)  # 直接预测 3D 坐标
+        self.pred_pos_proj = nn.Sequential(
+            nn.Linear(self.trans_dim, self.trans_dim),
+            nn.LayerNorm(self.trans_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(self.trans_dim, 3),
+        )
         
         self.pred_loss = config.pred_loss
         if self.config.pred_pos_transformer_layer != 0:
@@ -601,6 +606,10 @@ class PCP_MAE(nn.Module):
         # neighborhood 是 (B, G, group_size, 6)，只取坐标部分
         gt_coords = neighborhood[mask].reshape(B * M, -1, 6)[..., :3].contiguous()
         # loss1 = self.loss_func(rebuild_points, gt_coords)
+
+        rebuild_points = torch.clamp(rebuild_points, min=-10.0, max=10.0) # 为重建点云添加保护
+        gt_coords = torch.clamp(gt_coords, min=-10.0, max=10.0)
+
         with torch.no_grad():
             rebuild_points_fp32 = rebuild_points.float()
             gt_coords_fp32 = gt_coords.float()

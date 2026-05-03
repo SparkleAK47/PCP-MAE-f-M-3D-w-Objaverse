@@ -166,16 +166,15 @@ def run_net(args, config, train_writer=None, val_writer=None):
 
             with autocast(enabled=True):
                 loss1, loss2 = base_model(points)
-                loss = loss1 + loss2
+                loss = (loss1 + loss2).mean()
 
-            try:
-                scaler.scale(loss).backward()
-            except RuntimeError:
-                loss = loss.mean()
-                scaler.scale(loss).backward()
+            scaler.scale(loss).backward()
+
 
             if num_iter == config.step_per_update:
                 num_iter = 0
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(base_model.parameters(), max_norm=5.0)
                 scaler.step(optimizer)
                 scaler.update()
                 base_model.zero_grad()

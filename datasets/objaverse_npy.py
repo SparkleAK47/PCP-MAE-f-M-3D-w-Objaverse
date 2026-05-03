@@ -29,6 +29,15 @@ class ObjaverseNPY(Dataset):
             idxs = np.random.choice(data.shape[0], self.npoints, replace=True)
         pts = data[idxs, :].astype(np.float32)
 
+        xyz = pts[:, :3]
+        feat = pts[:, 3:]
+
+        xyz = xyz - np.mean(xyz, axis=0, keepdims=True)
+        max_dist = np.max(np.linalg.norm(xyz, axis=1))
+        if max_dist > 1e-6:
+            xyz = xyz / max_dist
+
+        pts = np.concatenate([xyz, feat], axis=1)
 
         # 返回3元组，匹配训练循环的解包格式
         return 'objaverse', file_name, pts
