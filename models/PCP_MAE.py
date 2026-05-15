@@ -610,10 +610,10 @@ class PCP_MAE(nn.Module):
         rebuild_points = torch.clamp(rebuild_points, min=-10.0, max=10.0) # 为重建点云添加保护
         gt_coords = torch.clamp(gt_coords, min=-10.0, max=10.0)
 
-        with torch.no_grad():
-            rebuild_points_fp32 = rebuild_points.float()
-            gt_coords_fp32 = gt_coords.float()
-            loss1 = self.loss_func(rebuild_points_fp32, gt_coords_fp32)
+        
+        rebuild_points_fp32 = rebuild_points.float()
+        gt_coords_fp32 = gt_coords.float()
+        loss1 = self.loss_func(rebuild_points_fp32, gt_coords_fp32)
         
         if vis: #visualization
             vis_points = neighborhood[~mask].reshape(B * (self.num_group - M), -1, 3)

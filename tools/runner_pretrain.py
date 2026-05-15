@@ -13,7 +13,7 @@ import numpy as np
 from torchvision import transforms
 from datasets import data_transforms
 from pointnet2_ops import pointnet2_utils
-from torch.cuda.amp import autocast, GradScaler
+from torch.cuda.amp import autocast
 
 class Acc_Metric:
     def __init__(self, acc = 0.):
@@ -50,7 +50,7 @@ def run_net(args, config, train_writer=None, val_writer=None):
     (_, extra_train_dataloader)  = builder.dataset_builder(args, config.dataset.extra_train) if config.dataset.get('extra_train') else (None, None)
     # build model
     base_model = builder.model_builder(config.model)
-    scaler = GradScaler(enabled=True)
+
     if args.use_gpu:
         base_model.to(args.local_rank)
     
@@ -164,19 +164,21 @@ def run_net(args, config, train_writer=None, val_writer=None):
             #     base_model.zero_grad()
             points = train_transforms(points)
 
-            with autocast(enabled=True):
+            with autocast(dtype=torch.bfloat16):
                 loss1, loss2 = base_model(points)
-                loss = (loss1 + loss2).mean()
+                loss = loss1 + loss2
 
-            scaler.scale(loss).backward()
-
+            try:
+                loss.backward()
+            except:
+                loss = loss.mean()
+                loss.backward()
 
             if num_iter == config.step_per_update:
                 num_iter = 0
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(base_model.parameters(), max_norm=5.0)
-                scaler.step(optimizer)
-                scaler.update()
+                # 梯度裁剪放在 optimizer.step() 之前
+                torch.nn.utils.clip_grad_norm_(base_model.parameters(), max_norm=1.0)
+                optimizer.step()
                 base_model.zero_grad()
 
             if args.distributed:
