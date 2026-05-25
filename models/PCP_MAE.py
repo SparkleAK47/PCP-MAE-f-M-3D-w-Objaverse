@@ -17,6 +17,119 @@ from .pointbert_mg.dvae import Encoder as MG_Encoder, Group as MG_Group
 from .pointbert_mg.misc import fps  # 如果 dvae 的 Group 依赖 fps，需确保可导入
 from torch.utils.checkpoint import checkpoint
 
+# MiniGPT-3D 兼容 encoder（使用 pointbert_mg 的 self-attn TransformerEncoder）
+from models.pointbert_mg.point_encoder import TransformerEncoder as MG_TransformerEncoder
+
+
+class PointTransformerMAEEncoder(nn.Module):
+    """
+    MiniGPT-3D 兼容的 PCP encoder：
+    - 与 pointbert_mg.PointTransformer 相同的前向图（cls + 512 patch + self-attn）
+    - 输出 x_vis / x_mask 供 PCP decoder 和 center prediction 使用
+    """
+    def __init__(self, config, **kwargs):
+        super().__init__()
+        tc = config.transformer_config
+        self.mask_ratio = tc.mask_ratio
+        self.mask_type = tc.mask_type
+        self.trans_dim = tc.trans_dim
+        self.depth = tc.depth
+        self.drop_path_rate = tc.drop_path_rate
+        self.num_heads = tc.num_heads
+        self.encoder_dims = tc.encoder_dims
+        point_dims = getattr(config, 'point_dims', 6)
+
+        self.encoder = MG_Encoder(
+            encoder_channel=self.encoder_dims,
+            point_input_dims=point_dims,
+        )
+        self.reduce_dim = nn.Linear(self.encoder_dims, self.trans_dim)
+
+        # 与 MiniGPT PointTransformer 完全一致
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, self.trans_dim))
+        self.cls_pos = nn.Parameter(torch.randn(1, 1, self.trans_dim))
+        self.pos_embed = nn.Sequential(
+            nn.Linear(3, 128),
+            nn.GELU(),
+            nn.Linear(128, self.trans_dim),
+        )
+
+        dpr = [x.item() for x in torch.linspace(0, self.drop_path_rate, self.depth)]
+        self.blocks = MG_TransformerEncoder(
+            embed_dim=self.trans_dim,
+            depth=self.depth,
+            drop_path_rate=dpr,
+            num_heads=self.num_heads,
+        )
+        self.norm = nn.LayerNorm(self.trans_dim)
+
+        trunc_normal_(self.cls_token, std=0.02)
+        trunc_normal_(self.cls_pos, std=0.02)
+
+    def _mask_center_block(self, center, noaug=False):
+        if noaug or self.mask_ratio == 0:
+            return torch.zeros(center.shape[:2], dtype=torch.bool, device=center.device)
+        mask_idx = []
+        for points in center:
+            points = points.unsqueeze(0)
+            index = random.randint(0, points.size(1) - 1)
+            distance_matrix = torch.norm(
+                points[:, index].reshape(1, 1, 3) - points, p=2, dim=-1
+            )
+            idx = torch.argsort(distance_matrix, dim=-1, descending=False)[0]
+            mask_num = int(self.mask_ratio * len(idx))
+            mask = torch.zeros(len(idx))
+            mask[idx[:mask_num]] = 1
+            mask_idx.append(mask.bool())
+        return torch.stack(mask_idx).to(center.device)
+
+    def _mask_center_rand(self, center, noaug=False):
+        B, G, _ = center.shape
+        if noaug or self.mask_ratio == 0:
+            return torch.zeros(center.shape[:2], dtype=torch.bool, device=center.device)
+        num_mask = int(self.mask_ratio * G)
+        overall_mask = np.zeros([B, G])
+        for i in range(B):
+            mask = np.hstack([np.zeros(G - num_mask), np.ones(num_mask)])
+            np.random.shuffle(mask)
+            overall_mask[i, :] = mask
+        return torch.from_numpy(overall_mask).to(torch.bool).to(center.device)
+
+    def forward(self, neighborhood, center, noaug=False):
+        """
+        neighborhood: (B, G, group_size, 6)
+        center:       (B, G, 3)
+        returns:      x_vis, x_mask, bool_masked_pos
+        """
+        if self.mask_type == 'rand':
+            bool_masked_pos = self._mask_center_rand(center, noaug=noaug)
+        else:
+            bool_masked_pos = self._mask_center_block(center, noaug=noaug)
+
+        B, G, C = center.shape[0], center.shape[1], self.trans_dim
+
+        # 1) patch embedding（与 MiniGPT 相同）
+        tokens = self.encoder(neighborhood)          # (B, G, 256)
+        tokens = self.reduce_dim(tokens)               # (B, G, 384)
+
+        # 2) 全长 self-attn + cls（与 MiniGPT 推理完全一致）
+        cls_t = self.cls_token.expand(B, -1, -1)
+        cls_p = self.cls_pos.expand(B, -1, -1)
+        pos = self.pos_embed(center)                   # (B, G, 384)
+
+        x = torch.cat([cls_t, tokens], dim=1)          # (B, 1+G, 384)
+        pos_full = torch.cat([cls_p, pos], dim=1)
+
+        x = self.blocks(x, pos_full)
+        x = self.norm(x)
+
+        patch_feat = x[:, 1:]                          # (B, G, 384)，cls 不参与 PCP 分支
+
+        # 3) 按 mask 切分，接口与原 MaskTransformer 一致
+        x_vis = patch_feat[~bool_masked_pos].reshape(B, -1, C)
+        x_mask = patch_feat[bool_masked_pos].reshape(B, -1, C)
+        return x_vis, x_mask, bool_masked_pos
+
 class Encoder(nn.Module):   ## Embedding module
     def __init__(self, encoder_channel):
         super().__init__()
@@ -488,7 +601,16 @@ class PCP_MAE(nn.Module):
         print_log(f'[PCP_MAE] ', logger ='PCP_MAE')
         self.config = config
         self.trans_dim = config.transformer_config.trans_dim
-        self.MAE_encoder = MaskTransformer(config)
+
+        # 选择
+        encoder_type = getattr(config, 'encoder_type', 'mask_transformer')  # 默认保持旧行为
+        if encoder_type == 'point_transformer':
+            self.MAE_encoder = PointTransformerMAEEncoder(config)
+            print_log('[PCP_MAE] Using MiniGPT-compatible PointTransformerMAEEncoder', logger='PCP_MAE')
+        else:
+            self.MAE_encoder = MaskTransformer(config)
+            print_log('[PCP_MAE] Using legacy MaskTransformer (cross-attn)', logger='PCP_MAE')
+
         self.group_size = config.group_size
         self.num_group = config.num_group
         self.drop_path_rate = config.transformer_config.drop_path_rate

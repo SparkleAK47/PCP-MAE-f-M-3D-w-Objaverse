@@ -303,3 +303,19 @@ def validate(base_model, extra_train_dataloader, test_dataloader, epoch, val_wri
 
 def test_net():
     pass
+
+@torch.no_grad()
+def extract_minigpt_global(model, pts):
+    enc = model.module.MAE_encoder if hasattr(model, 'module') else model.MAE_encoder
+    neighborhood, center = model.group_divider(pts)
+    tokens = enc.reduce_dim(enc.encoder(neighborhood))
+    B = tokens.size(0)
+    cls_t = enc.cls_token.expand(B, -1, -1)
+    cls_p = enc.cls_pos.expand(B, -1, -1)
+    pos = enc.pos_embed(center)
+    x = torch.cat([cls_t, tokens], 1)
+    pos_full = torch.cat([cls_p, pos], 1)
+    x = enc.norm(enc.blocks(x, pos_full))
+    cls = x[:, 0]
+    glob = x[:, 1:].max(dim=1).values
+    return torch.cat([cls, glob], dim=-1)   # router 特征，768 维
