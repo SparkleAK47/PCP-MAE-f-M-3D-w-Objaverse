@@ -1,9 +1,66 @@
+# hybrid-with-objaverse（V1）
+
 CUDA_VISIBLE_DEVICES=0 python main.py --config cfgs/pretrain/base.yaml --exp_name pcpmae_minigpt3d
 
 CUDA_VISIBLE_DEVICES=0 python main.py --config cfgs/pretrain/base.yaml --exp_name pcpmae_minigpt3d --start_ckpts /data/workspace/PCP-MAE/experiments/base/pretrain/pcpmae_minigpt3d/ckpt-last.pth
 
 
+# objaverse V2
+
+用 pointbert_mg 的 标准 PointTransformer trunk 替换 MaskTransformer（cross-attn）
+
 CUDA_VISIBLE_DEVICES=0 python main.py \
   --config cfgs/pretrain/base_minigpt_encoder.yaml \
   --exp_name pcp_minigpt_encoder_objaverse \
   --seed 42
+
+继续训练
+  CUDA_VISIBLE_DEVICES=0 python main.py \
+  --config cfgs/pretrain/base_minigpt_encoder.yaml \
+  --exp_name pcp_minigpt_encoder_objaverse \
+  --seed 42 \
+  --resume
+
+复制预训练权重到：/data/datasets/PCP_checkpoint/minigpt_encoder/ckpt-last.pth
+
+权重导出脚本：
+python tools/export_minigpt_encoder.py \
+  --pcp-ckpt /data/datasets/PCP_checkpoint/minigpt_encoder/ckpt-last.pth \
+  --out /data/workspace/MiniGPT-3D/params_weight/pc_encoder/point_model_pcp_v2.pth
+
+
+# Point-MAE
+
+第一阶段：预训练 Point-MAE
+
+cd /data/workspace/PCP-MAE
+
+# 对 660K 个 Objaverse 样本进行纯 Point-MAE（无中心预测）预训练
+# 单 GPU 训练，有效批次大小 64，300 epochs，bfloat16 AMP
+python main.py \
+    --config cfgs/pretrain/ablation_point_mae.yaml \
+    --exp_name point_mae_objaverse \
+    --seed 42
+
+# 训练将日志记录到：
+#   experiments/ablation_point_mae/pretrain/point_mae_objaverse/
+# 检查点将保存为：
+#   experiments/ablation_point_mae/pretrain/point_mae_objaverse/ckpt-best.pth
+#   experiments/ablation_point_mae/pretrain/point_mae_objaverse/ckpt-last.pth
+
+第二阶段：导出编码器权重
+训练完成后，提取骨干权重以适配 MiniGPT-3D：
+
+
+cd /data/workspace/PCP-MAE
+
+# 从最佳检查点提取仅编码器权重
+python ckpt_extract.py \
+    --ckpt experiments/ablation_point_mae/pretrain/point_mae_objaverse/ckpt-last.pth \
+    --out point_model_pointmae.pth
+
+# 预期输出：
+#   [ok] Extracted 158 parameter tensors
+#   [ok] All 9 required keys present
+#   [info] Skipped N non-backbone keys (decoder, pred_head, mask_token, etc.)
+#   [ok] Saved -> point_model_pointmae.pth

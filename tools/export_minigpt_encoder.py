@@ -21,7 +21,7 @@ def export(pcp_ckpt, out_path):
         if body.startswith(required) or body in ('cls_token', 'cls_pos'):
             dst[body] = v
 
-    missing = [x for x in ['cls_token', 'cls_pos', 'encoder.first_conv.0.weight', 'blocks.0.attn.qkv.weight']
+    missing = [x for x in ['cls_token', 'cls_pos', 'encoder.first_conv.0.weight', 'blocks.blocks.0.attn.qkv.weight']
                if x not in dst]
     if missing:
         raise RuntimeError(f'Export incomplete, missing: {missing}')
