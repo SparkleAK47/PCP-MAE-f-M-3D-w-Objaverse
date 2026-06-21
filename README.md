@@ -13,9 +13,10 @@
 | 模型配置 | 与 MiniGPT-3D 对齐：8192 点、6 维输入（xyz+rgb）、group_size=32、num_group=512、trans_dim=384、depth=12、num_heads=6 |
 | 数据集 | 新增 `ObjaverseNPY` 数据加载器，读取 MiniGPT-3D 的 `*_8192.npy` |
 | 编码器实现 | `models/pointbert_mg/` 从 `MiniGPT-3D/minigpt4/models/pointbert` 复制，保证 Group/Encoder/PointTransformer 与下游一致 |
-| 编码器变体 | 通过 `encoder_type` 切换：`mask_transformer`（V1 旧版 cross-attn）或 `point_transformer`（V2 兼容版 self-attn+cls） |
+| 编码器变体 | 通过 `encoder_type` 切换：`mask_transformer`（V1）或 `point_transformer`（V2） |
 | 训练 | 开启 bfloat16 AMP，单卡 RTX 3090 可训练；有效 batch=64（`total_bs=64, step_per_update=8`） |
 | 评测 | 官方 ShapeNet/ScanObjectNN 微调流程**不再作为本项目的最终评测**；编码器质量统一通过 MiniGPT-3D 四阶段训练 + GPT/Qwen 主观评测衡量 |
+| 分支说明 | **V1、V2、Point-MAE 的训练代码位于 `backup-trained` 分支**；**ShapeNet55-34 编码器的训练代码位于 `main` 分支**（模型配置同样适配了 MiniGPT-3D） |
 
 ---
 
@@ -26,23 +27,18 @@
 | 代号 | 权重文件名（MiniGPT-3D 侧） | 预训练方式 | 配置文件 | 说明 |
 |------|------------------------------|------------|----------|------|
 | **Baseline** | `point_model.pth` | ULIP-2 / Point-BERT（官方） | — | MiniGPT-3D 原始编码器，非本仓库训练 |
-| **V1** | `point_model_pcpmae.pth` | PCP-MAE + `MaskTransformer`（cross-attn） | `cfgs/pretrain/base.yaml` | 无 `cls_token`/`cls_pos` |
-| **V1 hybrid** | `point_model_hybrid.pth` | V1 骨干 + 从 Baseline 拷贝 cls | 手动合并 | 弥补 V1 缺失的 cls 参数 |
-| **V2** | `point_model_pcp_v2.pth` | PCP-MAE + `PointTransformerMAEEncoder` | `cfgs/pretrain/base_minigpt_encoder.yaml` | 预训练前向与 MiniGPT 推理一致，含 cls |
+| **V1** | `point_model_pcpmae.pth` | PCP-MAE + `MaskTransformer`（cross-attn） | `cfgs/pretrain/base.yaml` | 无 `cls_token`/`cls_pos`；预训练与下游推理编码器实现不同 |
+| **V1 hybrid** | `point_model_hybrid.pth` | V1 骨干 + 从 Baseline 拷贝 cls | 手动合并 | 为 V1 补充 cls 参数，使其可直接被 MiniGPT-3D 加载 |
+| **V2** | `point_model_pcp_v2.pth` | PCP-MAE + `PointTransformerMAEEncoder` | `cfgs/pretrain/base_minigpt_encoder.yaml` | 预训练与 MiniGPT 推理使用一致的 PointTransformer，含 cls |
 | **Point-MAE** | `point_model_pointmae.pth` | 纯 Point-MAE（`ita=0`） | `cfgs/pretrain/ablation_point_mae.yaml` | 关闭中心预测，其余与 V2 相同 |
-| **ShapeNet55-34** | `pcpmae_ShapeNet.pth` / `pcpmae_ShapeNet_fixed.pth` | 官方 ShapeNet 预训练权重 | 官方 `base.yaml` | 需 `fix_pcpmae_shapenet.py` 适配 6 维输入 |
+| **ShapeNet55-34** | `pcpmae_ShapeNet.pth` / `pcpmae_ShapeNet_fixed.pth` | `main` 分支训练的 PCP-MAE（MaskTransformer） | 该分支的 `base.yaml` | 数据为 ShapeNet55-34；需 `fix_pcpmae_shapenet.py` 适配 6 维输入 |
 
-### 架构差异（关键）
+### 架构差异说明
 
-```
-V1 (MaskTransformer):
-  patch tokens → cross-attention（visible + mask 双分支）→ 无 cls
-  权重导出到 MiniGPT PointTransformer（纯 self-attn + cls）→ 计算图不匹配
+- **V1 (MaskTransformer)**：预训练时 patch tokens 经 cross‑attention（visible + mask 双分支），无 cls token。  
+  下游 MiniGPT-3D 使用的是标准 PointTransformer（self‑attention + cls token），二者实现不同，因此 V1 权重需通过 **hybrid 合并** 补充 cls 参数后使用。
 
-V2 / Point-MAE (PointTransformerMAEEncoder):
-  patch tokens → cls + 全长 self-attn（与 MiniGPT 相同）→ mask 后再送 PCP decoder
-  权重可直接导出为 MiniGPT 的 point_model 格式
-```
+- **V2 / Point-MAE (PointTransformerMAEEncoder)**：预训练直接采用与 MiniGPT-3D 完全相同的 PointTransformer 结构（self‑attention + cls token），权重可无缝导出，无需额外合并。
 
 ---
 
@@ -63,13 +59,13 @@ V2 / Point-MAE (PointTransformerMAEEncoder):
 
 ### 3.2 ShapeNet55-34（对照实验）
 
-使用官方 PCP-MAE 预训练权重（[Google Drive](https://drive.google.com/drive/folders/1smQMWBBEdMOXVAzIBs3xCBrcyQDg8_GS)），本地路径示例：
+使用 ShapeNet55-34 数据集，点云仅 3 维 xyz。该编码器在 `main` 分支下训练（模型为 MaskTransformer，配置已适配 MiniGPT-3D）。本地路径示例：
 
 ```
 /data/workspace/PCP-MAE/data/ShapeNet55-34/
 ```
 
-ShapeNet 点云仅 3 维 xyz，接入 MiniGPT-3D 前需运行修复脚本（见 §5.5）。
+接入 MiniGPT-3D 前需运行修复脚本（见 §5.5）。
 
 ---
 
@@ -114,7 +110,8 @@ experiments/{config文件名}/{config父目录}/TFBoard/{exp_name}/
 **代号**：`hybrid-with-objaverse`（V1）
 
 **配置**：[`cfgs/pretrain/base.yaml`](cfgs/pretrain/base.yaml)  
-**特点**：默认 `encoder_type=mask_transformer`，使用 cross-attention 的 `MaskTransformer`，与 MiniGPT 推理图不一致。
+**分支**：`backup-trained`  
+**特点**：`encoder_type=mask_transformer`，使用 cross-attention 的 `MaskTransformer`。
 
 ```bash
 cd /data/workspace/PCP-MAE
@@ -163,8 +160,6 @@ new['base_model']['cls_pos'] = original['base_model']['cls_pos']
 torch.save(new, 'point_model_hybrid.pth')
 ```
 
-> **注意**：V1 方案因预训练计算图与 MiniGPT 推理图不一致，不推荐继续使用。保留此流程仅为实验记录。
-
 ---
 
 ### 5.2 V2：PCP-MAE + PointTransformerMAEEncoder（Objaverse）
@@ -172,7 +167,8 @@ torch.save(new, 'point_model_hybrid.pth')
 **代号**：`objaverse V2`
 
 **配置**：[`cfgs/pretrain/base_minigpt_encoder.yaml`](cfgs/pretrain/base_minigpt_encoder.yaml)  
-**特点**：`encoder_type: point_transformer`，使用 `PointTransformerMAEEncoder`（`pointbert_mg` 的标准 self-attn + cls），与 MiniGPT `PointTransformer` 前向一致。
+**分支**：`backup-trained`  
+**特点**：`encoder_type: point_transformer`，使用与 MiniGPT-3D 一致的 PointTransformer（self-attn + cls）。
 
 ```bash
 cd /data/workspace/PCP-MAE
@@ -221,6 +217,7 @@ MiniGPT-3D/params_weight/pc_encoder/point_model_pcp_v2.pth
 ### 5.3 Point-MAE 消融（Objaverse）
 
 **配置**：[`cfgs/pretrain/ablation_point_mae.yaml`](cfgs/pretrain/ablation_point_mae.yaml)  
+**分支**：`backup-trained`  
 **特点**：与 V2 完全相同，唯一区别是 `ita: 0.0`（关闭 PCP 中心预测分支，纯 Point-MAE）。
 
 ```bash
@@ -265,7 +262,10 @@ MiniGPT-3D/params_weight/pc_encoder/point_model.pth
 
 ### 5.5 ShapeNet55-34 权重（对照实验）
 
+**分支**：`main`（该分支下的训练代码与 V1/V2 略有差异，但模型架构为 MaskTransformer，且配置已适配 MiniGPT-3D 的 patch 划分方式）  
+**数据**：ShapeNet55-34 点云（仅 3 维 xyz）
 
+训练后得到权重 `pcpmae_ShapeNet.pth`，本地路径：
 
 ```
 MiniGPT-3D/params_weight/pc_encoder/pcpmae_ShapeNet.pth
@@ -336,9 +336,7 @@ MiniGPT-3D 训练日志位于项目根目录：`log_pcpmae_stage_{1,2,3,4}.txt`�
 
 各 stage 输出目录在 yaml 的 `run.output_dir`，例如 `./output/pcpmae/stage_{1,2,3,4}/`。
 
-
-
-### 6.5 主观评测
+### 6.4 主观评测
 
 评测配置：[`MiniGPT-3D/eval_configs/benchmark_evaluation_paper.yaml`](../MiniGPT-3D/eval_configs/benchmark_evaluation_paper.yaml)
 
@@ -405,7 +403,7 @@ python point_model_VS_hybrid.py \
 | [`tools/export_minigpt_encoder.py`](tools/export_minigpt_encoder.py) | V2（`encoder_type=point_transformer`） | 含 cls 的 `base_model` 字典 |
 | [`ckpt_extract.py`](ckpt_extract.py) | V2、Point-MAE | 同上，带完整性校验 |
 | 手动提取（V1） | V1（`MaskTransformer`） | 无 cls，需 hybrid 合并 |
-| [`MiniGPT-3D/fix_pcpmae_shapenet.py`](../MiniGPT-3D/fix_pcpmae_shapenet.py) | ShapeNet 官方权重 | 3ch→6ch + 补 cls |
+| [`MiniGPT-3D/fix_pcpmae_shapenet.py`](../MiniGPT-3D/fix_pcpmae_shapenet.py) | ShapeNet 权重（main 分支训练） | 3ch→6ch + 补 cls |
 
 导出后的文件格式统一为：
 
@@ -421,17 +419,15 @@ python point_model_VS_hybrid.py \
 
 ---
 
-
-
-## 11. 文件索引
+## 9. 文件索引
 
 | 路径 | 用途 |
 |------|------|
 | [`note.txt`](note.txt) | 实验命令速查 |
 | [`origin_readme.md`](origin_readme.md) | 官方 PCP-MAE 说明 |
-| [`cfgs/pretrain/base.yaml`](cfgs/pretrain/base.yaml) | V1 配置 |
-| [`cfgs/pretrain/base_minigpt_encoder.yaml`](cfgs/pretrain/base_minigpt_encoder.yaml) | V2 配置 |
-| [`cfgs/pretrain/ablation_point_mae.yaml`](cfgs/pretrain/ablation_point_mae.yaml) | Point-MAE 消融配置 |
+| [`cfgs/pretrain/base.yaml`](cfgs/pretrain/base.yaml) | V1 配置（backup-trained 分支） |
+| [`cfgs/pretrain/base_minigpt_encoder.yaml`](cfgs/pretrain/base_minigpt_encoder.yaml) | V2 配置（backup-trained 分支） |
+| [`cfgs/pretrain/ablation_point_mae.yaml`](cfgs/pretrain/ablation_point_mae.yaml) | Point-MAE 消融配置（backup-trained 分支） |
 | [`models/PCP_MAE.py`](models/PCP_MAE.py) | 模型定义（含 `PointTransformerMAEEncoder`） |
 | [`models/pointbert_mg/`](models/pointbert_mg/) | MiniGPT-3D 兼容的 PointTransformer 实现 |
 
