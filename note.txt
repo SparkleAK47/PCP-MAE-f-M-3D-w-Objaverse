@@ -2,7 +2,7 @@
 
 CUDA_VISIBLE_DEVICES=0 python main.py --config cfgs/pretrain/base.yaml --exp_name pcpmae_minigpt3d
 
-CUDA_VISIBLE_DEVICES=0 python main.py --config cfgs/pretrain/base.yaml --exp_name pcpmae_minigpt3d --start_ckpts /data/workspace/PCP-MAE/experiments/base/pretrain/pcpmae_minigpt3d/ckpt-last.pth
+CUDA_VISIBLE_DEVICES=0 python main.py --config cfgs/pretrain/base.yaml --exp_name pcpmae_minigpt3d --start_ckpts experiments/base/pretrain/pcpmae_minigpt3d/ckpt-last.pth
 
 
 # objaverse V2
@@ -33,7 +33,7 @@ python tools/export_minigpt_encoder.py \
 
 第一阶段：预训练 Point-MAE
 
-cd /data/workspace/PCP-MAE
+cd /data/workspace/PCP-MAE_with_Objaverse
 
 # 对 660K 个 Objaverse 样本进行纯 Point-MAE（无中心预测）预训练
 # 单 GPU 训练，有效批次大小 64，300 epochs，bfloat16 AMP
@@ -52,7 +52,7 @@ python main.py \
 训练完成后，提取骨干权重以适配 MiniGPT-3D：
 
 
-cd /data/workspace/PCP-MAE
+cd /data/workspace/PCP-MAE_with_Objaverse
 
 # 从最佳检查点提取仅编码器权重
 python ckpt_extract.py \
@@ -64,3 +64,60 @@ python ckpt_extract.py \
 #   [ok] All 9 required keys present
 #   [info] Skipped N non-backbone keys (decoder, pred_head, mask_token, etc.)
 #   [ok] Saved -> point_model_pointmae.pth
+
+
+
+第一阶段：预训练 MaskTransformer Point-MAE
+
+cd /data/workspace/PCP-MAE_with_Objaverse
+
+# 在 660K 个 Objaverse 样本上训练带有 MaskTransformer（交叉注意力）编码器的 Point-MAE
+# 单 GPU，300 epochs，bfloat16 AMP
+python main.py \
+    --config cfgs/pretrain/ablation_mask_point_mae.yaml \
+    --exp_name mask_mae_objaverse \
+    --seed 42
+
+# 训练日志和检查点将被写入：
+#   experiments/ablation_mask_point_mae/pretrain/mask_mae_objaverse/
+预期训练时间： 与 PointTransformer 变体相似（在 8× A100 上约 2–3 天）。由于 MaskTransformer 的每个块处理 2 个序列（可见 + 被 mask 的），交叉注意力路径稍微重一些，但差异很小。
+
+第二阶段：导出编码器权重
+训练完成后，提取权重并在需要时生成 cls_token/cls_pos：
+
+
+cd /data/workspace/PCP-MAE_with_Objaverse
+
+# 从最佳检查点提取仅编码器权重
+# 脚本会自动检测到缺少 cls_token/cls_pos 并生成它们
+python ckpt_extract.py \
+    --ckpt experiments/ablation_mask_point_mae/pretrain/mask_mae_objaverse/ckpt-best.pth \
+    --out point_model_maskmae.pth
+
+# 预期输出：
+#   [info] Auto-generated (trunc_normal init): cls_token, cls_pos
+#          This is expected for MaskTransformer checkpoints.
+#   [ok] Extracted 158 parameter tensors
+#   [ok] All 9 required keys present
+#   [info] Skipped N non-backbone keys (decoder, pred_head, mask_token, etc.)
+#   [ok] Saved -> point_model_maskmae.pth
+验证导出的文件：
+
+
+python -c "
+import torch
+ckpt = torch.load('point_model_maskmae.pth', map_location='cpu')
+sd = ckpt['base_model']
+required = ['cls_token','cls_pos','encoder.first_conv.0.weight',
+            'reduce_dim.weight','blocks.blocks.0.attn.qkv.weight',
+            'blocks.blocks.11.attn.qkv.weight','norm.weight']
+for k in required:
+    assert k in sd, f'Missing: {k}'
+    print(f'  ✓ {k}: {sd[k].shape}')
+print(f'Total keys: {len(sd)}')
+
+# Verify first_conv is 6-channel (Objaverse)
+assert sd['encoder.first_conv.0.weight'].shape[1] == 6, \
+    f'Expected 6 input channels, got {sd[\"encoder.first_conv.0.weight\"].shape[1]}'
+print('  ✓ first_conv input channels = 6 (XYZ+RGB, correct for Objaverse)')
+"

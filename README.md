@@ -1,6 +1,8 @@
-# PCP-MAE（MiniGPT-3D 适配版）
+# PCP-MAE（MiniGPT-3D 适配版 · Objaverse 分支）
 
 本仓库在 [PCP-MAE 官方实现](https://github.com/aHapBean/PCP-MAE) 基础上做了大量修改，用于在 **Objaverse 660K 点云** 上预训练点云编码器，并接入 [MiniGPT-3D](https://github.com/TangYuan96/MiniGPT-3D) 作为唯一可行的下游评测框架。
+
+> **主文档**：全部实验流程（含 ShapeNet55-34 对照）、编码器变体总览、MiniGPT-3D 四阶段训练与评测的完整文档请参阅 **[MiniGPT-3D 主 README](../MiniGPT-3D/README.md)**。
 
 原始 PCP-MAE 论文说明、ShapeNet 分类/分割评测流程见 [`origin_readme.md`](origin_readme.md)。
 
@@ -16,7 +18,7 @@
 | 编码器变体 | 通过 `encoder_type` 切换：`mask_transformer`（V1）或 `point_transformer`（V2） |
 | 训练 | 开启 bfloat16 AMP，单卡 RTX 3090 可训练；有效 batch=64（`total_bs=64, step_per_update=8`） |
 | 评测 | 官方 ShapeNet/ScanObjectNN 微调流程**不再作为本项目的最终评测**；编码器质量统一通过 MiniGPT-3D 四阶段训练 + GPT/Qwen 主观评测衡量 |
-| ShapeNet55-34 编码器 | 独立的 ShapeNet55-34（PCP-MAE + MaskTransformer）训练代码位于 [PCP-MAE](https://github.com/SparkleAK47/PCP_MAE_for_MiniGPT3D) 仓库 |
+| ShapeNet55-34 编码器 | 独立的 ShapeNet55-34（PCP-MAE + MaskTransformer）训练代码位于 **[PCP-MAE_with_ShapeNet](../PCP-MAE_with_ShapeNet)** 仓库 |
 
 ---
 
@@ -30,8 +32,9 @@
 | **V1** | `point_model_pcpmae.pth` | PCP-MAE + `MaskTransformer`（cross-attn） | `cfgs/pretrain/base.yaml` | 无 `cls_token`/`cls_pos`；预训练与下游推理编码器实现不同 |
 | **V1 hybrid** | `point_model_hybrid.pth` | V1 骨干 + 从 Baseline 拷贝 cls | 手动合并 | 为 V1 补充 cls 参数，使其可直接被 MiniGPT-3D 加载 |
 | **V2** | `point_model_pcp_v2.pth` | PCP-MAE + `PointTransformerMAEEncoder` | `cfgs/pretrain/base_minigpt_encoder.yaml` | 预训练与 MiniGPT 推理使用一致的 PointTransformer，含 cls |
-| **Point-MAE** | `point_model_pointmae.pth` | 纯 Point-MAE（`ita=0`） | `cfgs/pretrain/ablation_point_mae.yaml` | 关闭中心预测，其余与 V2 相同 |
-| **ShapeNet55-34** | `pcpmae_ShapeNet.pth` / `pcpmae_ShapeNet_fixed.pth` | `main` 分支训练的 PCP-MAE（MaskTransformer） | 该分支的 `base.yaml` | 数据为 ShapeNet55-34；需 `fix_pcpmae_shapenet.py` 适配 6 维输入 |
+| **Point-MAE** | `point_model_pointmae.pth` | 纯 Point-MAE（`ita=0`），PointTransformer 编码器 | `cfgs/pretrain/ablation_point_mae.yaml` | 关闭中心预测，其余与 V2 相同 |
+| **Mask Point-MAE** | `point_model_maskmae.pth` | 纯 Point-MAE（`ita=0`），MaskTransformer 编码器 | `cfgs/pretrain/ablation_mask_point_mae.yaml` | 交叉注意力架构 + 无中心预测；导出时自动补 cls_token/cls_pos |
+| **ShapeNet55-34** | `pcpmae_ShapeNet.pth` / `pcpmae_ShapeNet_fixed.pth` | [PCP-MAE_with_ShapeNet](../PCP-MAE_with_ShapeNet) 训练的 PCP-MAE（MaskTransformer） | 该仓库的 `base.yaml` | 数据为 ShapeNet55-34；需 `fix_pcpmae_shapenet.py` 适配 6 维输入 |
 
 ### 架构差异说明
 
@@ -62,7 +65,7 @@
 使用 ShapeNet55-34 数据集，点云仅 3 维 xyz。该编码器在 `main` 分支下训练（模型为 MaskTransformer，配置已适配 MiniGPT-3D）。本地路径示例：
 
 ```
-/data/workspace/PCP-MAE/data/ShapeNet55-34/
+/data/workspace/PCP-MAE_with_ShapeNet/data/ShapeNet55-34/
 ```
 
 接入 MiniGPT-3D 前需运行修复脚本（见 §5.5）。
@@ -113,7 +116,7 @@ experiments/{config文件名}/{config父目录}/TFBoard/{exp_name}/
 **特点**：`encoder_type=mask_transformer`，使用 cross-attention 的 `MaskTransformer`。
 
 ```bash
-cd /data/workspace/PCP-MAE
+cd /data/workspace/PCP-MAE_with_Objaverse
 
 # 从头训练
 CUDA_VISIBLE_DEVICES=0 python main.py \
@@ -169,7 +172,7 @@ torch.save(new, 'point_model_hybrid.pth')
 **特点**：`encoder_type: point_transformer`，使用与 MiniGPT-3D 一致的 PointTransformer（self-attn + cls）。
 
 ```bash
-cd /data/workspace/PCP-MAE
+cd /data/workspace/PCP-MAE_with_Objaverse
 
 CUDA_VISIBLE_DEVICES=0 python main.py \
   --config cfgs/pretrain/base_minigpt_encoder.yaml \
@@ -218,7 +221,7 @@ MiniGPT-3D/params_weight/pc_encoder/point_model_pcp_v2.pth
 **特点**：与 V2 完全相同，唯一区别是 `ita: 0.0`（关闭 PCP 中心预测分支，纯 Point-MAE）。
 
 ```bash
-cd /data/workspace/PCP-MAE
+cd /data/workspace/PCP-MAE_with_Objaverse
 
 CUDA_VISIBLE_DEVICES=0 python main.py \
   --config cfgs/pretrain/ablation_point_mae.yaml \
@@ -259,7 +262,7 @@ MiniGPT-3D/params_weight/pc_encoder/point_model.pth
 
 ### 5.5 ShapeNet55-34 权重（对照实验）
 
-**仓库**：[PCP-MAE](https://github.com/SparkleAK47/PCP_MAE_for_MiniGPT3D)（独立的 ShapeNet55-34 训练代码，模型架构为 MaskTransformer，配置已适配 MiniGPT-3D 的 patch 划分方式）  
+**仓库**：[PCP-MAE_with_ShapeNet](../PCP-MAE_with_ShapeNet)（独立的 ShapeNet55-34 训练代码，模型架构为 MaskTransformer，配置已适配 MiniGPT-3D 的 patch 划分方式）  
 **数据**：ShapeNet55-34 点云（仅 3 维 xyz）
 
 训练后得到权重 `pcpmae_ShapeNet.pth`，本地路径：
@@ -286,6 +289,8 @@ python fix_pcpmae_shapenet.py \
 
 ## 6. 接入 MiniGPT-3D
 
+> **完整流程**（权重导出、四阶段训练、评测）请参阅 **[MiniGPT-3D 主 README](../MiniGPT-3D/README.md)**，本文档仅保留各编码器特定的权重导出步骤。
+
 ### 6.1 放置权重
 
 将导出的 `.pth` 文件放入：
@@ -294,18 +299,7 @@ python fix_pcpmae_shapenet.py \
 /data/workspace/MiniGPT-3D/params_weight/pc_encoder/
 ```
 
-### 6.2 修改训练配置
-
-在 `MiniGPT-3D/train_configs/MiniGPT_3D/stage_{1,2,3,4,5}.yaml` 中设置：
-
-```yaml
-model:
-  pc_encoder_ckpt: "./params_weight/pc_encoder/point_model_pcp_v2.pth"  # 换成你的权重
-  freeze_pc: True    # 冻结编码器（默认）
-  # freeze_pc: False  # 解冻编码器（见 stage_5.yaml）
-```
-
-各实验对应权重示例：
+### 6.2 各实验权重配置参考
 
 | 实验 | `pc_encoder_ckpt` | `freeze_pc` |
 |------|-------------------|-------------|
@@ -315,60 +309,11 @@ model:
 | Point-MAE | `point_model_pointmae.pth` | `True` |
 | ShapeNet55-34 | `pcpmae_ShapeNet_fixed.pth` | `True` / `False`（stage_5） |
 
-### 6.3 四阶段训练
+### 6.3 后续流程
 
-```bash
-cd /data/workspace/MiniGPT-3D
+训练、评测、编码器诊断的完整流程见 **[MiniGPT-3D 主 README §6–§8](../MiniGPT-3D/README.md)**。
 
-export PYTHONPATH=$PWD
-export WANDB_MODE=disabled
-
-CUDA_VISIBLE_DEVICES=0 python train.py --cfg-path ./train_configs/MiniGPT_3D/stage_1.yaml > log_pcpmae_stage_1.txt
-CUDA_VISIBLE_DEVICES=0 python train.py --cfg-path ./train_configs/MiniGPT_3D/stage_2.yaml > log_pcpmae_stage_2.txt
-CUDA_VISIBLE_DEVICES=0 python train.py --cfg-path ./train_configs/MiniGPT_3D/stage_3.yaml > log_pcpmae_stage_3.txt
-CUDA_VISIBLE_DEVICES=0 python train.py --cfg-path ./train_configs/MiniGPT_3D/stage_4.yaml > log_pcpmae_stage_4.txt
-```
-
-MiniGPT-3D 训练日志位于项目根目录：`log_pcpmae_stage_{1,2,3,4}.txt`（或 `log_stage_*.txt`）。
-
-各 stage 输出目录在 yaml 的 `run.output_dir`，例如 `./output/pcpmae/stage_{1,2,3,4}/`。
-
-### 6.4 主观评测
-
-评测配置：[`MiniGPT-3D/eval_configs/benchmark_evaluation_paper.yaml`](../MiniGPT-3D/eval_configs/benchmark_evaluation_paper.yaml)
-
-```bash
-cd /data/workspace/MiniGPT-3D
-
-# 开放词汇分类
-python pointllm/eval/eval_objaverse.py \
-  --out_path ./evaluate/<实验名> \
-  --task_type classification \
-  --cfg-path ./eval_configs/benchmark_evaluation_paper.yaml \
-  --prompt_index 0
-
-# ModelNet40 闭集分类
-python pointllm/eval/eval_modelnet_cls.py \
-  --out_path ./evaluate/<实验名> \
-  --cfg-path ./eval_configs/benchmark_evaluation_paper.yaml \
-  --prompt_index 0
-
-# 物体描述生成
-python pointllm/eval/eval_objaverse.py \
-  --out_path ./evaluate/<实验名> \
-  --task_type captioning \
-  --cfg-path ./eval_configs/benchmark_evaluation_paper.yaml \
-  --prompt_index 2
-
-# Qwen API 主观打分
-python pointllm/eval/evaluator_opensource_llm_QwenAPI.py \
-  --results_path ./evaluate/<实验名>/evaluation/<结果json> \
-  --eval_type <任务类型> \
-  --model_type qwen-flash \
-  --parallel --num_workers 4
-```
-
-> 若所有 stage 均为 `freeze_pc: True`，评测 yaml 中 **必须** 设置 `pc_encoder_ckpt` 指向对应预训练权重；否则加载的是错误/默认编码器。
+> **注意**：若所有训练 stage 均为 `freeze_pc: True`，评测 yaml 中 **必须** 设置 `pc_encoder_ckpt` 指向对应预训练权重；否则加载的是错误/默认编码器。
 
 ---
 
@@ -424,9 +369,13 @@ python point_model_VS_hybrid.py \
 | [`origin_readme.md`](origin_readme.md) | 官方 PCP-MAE 说明 |
 | [`cfgs/pretrain/base.yaml`](cfgs/pretrain/base.yaml) | V1 配置 |
 | [`cfgs/pretrain/base_minigpt_encoder.yaml`](cfgs/pretrain/base_minigpt_encoder.yaml) | V2 配置 |
-| [`cfgs/pretrain/ablation_point_mae.yaml`](cfgs/pretrain/ablation_point_mae.yaml) | Point-MAE 消融配置 |
-| [`models/PCP_MAE.py`](models/PCP_MAE.py) | 模型定义（含 `PointTransformerMAEEncoder`） |
+| [`cfgs/pretrain/ablation_point_mae.yaml`](cfgs/pretrain/ablation_point_mae.yaml) | Point-MAE 消融配置（PointTransformer 编码器） |
+| [`cfgs/pretrain/ablation_mask_point_mae.yaml`](cfgs/pretrain/ablation_mask_point_mae.yaml) | Point-MAE 消融配置（MaskTransformer 编码器） |
+| [`models/PCP_MAE.py`](models/PCP_MAE.py) | 模型定义（含 `PointTransformerMAEEncoder` + `MaskTransformer`） |
 | [`models/pointbert_mg/`](models/pointbert_mg/) | MiniGPT-3D 兼容的 PointTransformer 实现 |
+| [`ckpt_extract.py`](ckpt_extract.py) | 通用权重提取（V2/Point-MAE，带完整性校验） |
+| [`tools/export_minigpt_encoder.py`](tools/export_minigpt_encoder.py) | V2 专用导出脚本 |
+| [`ckpt-extract_for_pcpmae-pretrain.py`](ckpt-extract_for_pcpmae-pretrain.py) | V1 手动提取参考脚本 |
 
 ---
 
