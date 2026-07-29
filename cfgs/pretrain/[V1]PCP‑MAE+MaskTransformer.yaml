@@ -13,7 +13,7 @@ scheduler: {
 }}
 
 early_stopping: {
-  patience: 5,
+  patience: 10,
   monitor: "val_total_loss"
 }
 

@@ -70,7 +70,7 @@ def validate_loss(base_model, val_dataloader, config, args, logger=None):
         if args.distributed:
             loss = dist_utils.reduce_tensor(loss, args)
         
-            val_loss_total.update(loss.item())
+        val_loss_total.update(loss.item())
     
     base_model.train()
     return val_loss_total.avg()
@@ -296,10 +296,11 @@ def run_net(args, config, train_writer=None, val_writer=None):
                 best_ckpt_path = os.path.join(args.experiment_path, 'ckpt-best.pth')
                 if os.path.exists(best_ckpt_path):
                     best_state = torch.load(best_ckpt_path, map_location='cpu')
-                    base_ckpt = {k.replace("module.", ""): v for k, v in best_state['base_model'].items()}
                     if args.distributed:
+                        base_ckpt = {k.replace("module.", ""): v for k, v in best_state['base_model'].items()}
                         base_model.module.load_state_dict(base_ckpt, strict=True)
                     else:
+                        base_ckpt = best_state['base_model']
                         base_model.load_state_dict(base_ckpt, strict=True)
                     print_log(f'[Early Stopping] Rolled back to best checkpoint @ epoch {best_val_loss_epoch}.', logger=logger)
                     # Save the best weights as final ckpt-last
