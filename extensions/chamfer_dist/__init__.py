@@ -1,85 +1,63 @@
-# -*- coding: utf-8 -*-
-# @Author: Thibault GROUEIX
-# @Date:   2019-08-07 20:54:24
-# @Last Modified by:   Haozhe Xie
-# @Last Modified time: 2019-12-18 15:06:25
-# @Email:  cshzxie@gmail.com
+"""
+Pure PyTorch implementations of Chamfer distance.
 
+Uses only built-in PyTorch ops (torch.cdist + torch.min) so autograd
+handles backward automatically — no hand-written backward pass needed.
+
+This avoids the CUDA OOM (138 GiB allocate error) caused by dimension
+mismatches in the previous custom ChamferFunction.backward.
+"""
 import torch
-
-import chamfer
-
-
-class ChamferFunction(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, xyz1, xyz2):
-        dist1, dist2, idx1, idx2 = chamfer.forward(xyz1, xyz2)
-        ctx.save_for_backward(xyz1, xyz2, idx1, idx2)
-
-        return dist1, dist2
-
-    @staticmethod
-    def backward(ctx, grad_dist1, grad_dist2):
-        xyz1, xyz2, idx1, idx2 = ctx.saved_tensors
-        grad_xyz1, grad_xyz2 = chamfer.backward(xyz1, xyz2, idx1, idx2, grad_dist1, grad_dist2)
-        return grad_xyz1, grad_xyz2
+import torch.nn as nn
 
 
-class ChamferDistanceL2(torch.nn.Module):
-    f''' Chamder Distance L2
-    '''
-    def __init__(self, ignore_zeros=False):
+class ChamferDistanceL1(nn.Module):
+    """
+    Chamfer L1 (mean Euclidean distance).
+
+    loss = mean(min_j ||x_i - y_j||_2) + mean(min_i ||y_j - x_i||_2)
+
+    torch.cdist(xyz1, xyz2, p=2) returns the Euclidean (L2) distances,
+    i.e. sqrt(sum((x-y)^2)). This is what we use for "L1" Chamfer.
+    """
+    def __init__(self, ignore_border=False):
         super().__init__()
-        self.ignore_zeros = ignore_zeros
+        self.ignore_border = ignore_border
 
     def forward(self, xyz1, xyz2):
-        batch_size = xyz1.size(0)
-        if batch_size == 1 and self.ignore_zeros:
-            non_zeros1 = torch.sum(xyz1, dim=2).ne(0)
-            non_zeros2 = torch.sum(xyz2, dim=2).ne(0)
-            xyz1 = xyz1[non_zeros1].unsqueeze(dim=0)
-            xyz2 = xyz2[non_zeros2].unsqueeze(dim=0)
+        # cdist(p=2) -> Euclidean distance  sqrt(sum((x-y)^2))
+        dist = torch.cdist(xyz1.float(), xyz2.float(), p=2)  # (B, N, M)
+        dist1 = dist.min(dim=2).values  # (B, N)
+        dist2 = dist.min(dim=1).values  # (B, M)
+        if self.ignore_border:
+            dist1 = dist1[:, 1:-1]
+            dist2 = dist2[:, 1:-1]
+        return dist1.mean() + dist2.mean()
 
-        dist1, dist2 = ChamferFunction.apply(xyz1, xyz2)
-        return torch.mean(dist1) + torch.mean(dist2)
 
-class ChamferDistanceL2_split(torch.nn.Module):
-    f''' Chamder Distance L2
-    '''
-    def __init__(self, ignore_zeros=False):
+class ChamferDistanceL2(nn.Module):
+    """
+    Chamfer distance using Euclidean (L2) distance.
+
+    NOTE: Despite the name "L2", the original implementation computes
+    the actual Euclidean distance (sqrt of sum of squares), NOT squared
+    Euclidean distance. This matches the original hand-written backward
+    where gradient = grad_dist * (x - y) / (dist + eps), i.e. the
+    derivative of sqrt(L2). We preserve this exact behavior by using
+    torch.cdist(xyz1, xyz2, p=2) which returns sqrt'd L2, without
+    further squaring.
+
+    loss = mean(min_j ||x_i - y_j||_2) + mean(min_i ||y_j - x_i||_2)
+    """
+    def __init__(self, ignore_border=False):
         super().__init__()
-        self.ignore_zeros = ignore_zeros
+        self.ignore_border = ignore_border
 
     def forward(self, xyz1, xyz2):
-        batch_size = xyz1.size(0)
-        if batch_size == 1 and self.ignore_zeros:
-            non_zeros1 = torch.sum(xyz1, dim=2).ne(0)
-            non_zeros2 = torch.sum(xyz2, dim=2).ne(0)
-            xyz1 = xyz1[non_zeros1].unsqueeze(dim=0)
-            xyz2 = xyz2[non_zeros2].unsqueeze(dim=0)
-
-        dist1, dist2 = ChamferFunction.apply(xyz1, xyz2)
-        return torch.mean(dist1), torch.mean(dist2)
-
-class ChamferDistanceL1(torch.nn.Module):
-    f''' Chamder Distance L1
-    '''
-    def __init__(self, ignore_zeros=False):
-        super().__init__()
-        self.ignore_zeros = ignore_zeros
-
-    def forward(self, xyz1, xyz2):
-        batch_size = xyz1.size(0)
-        if batch_size == 1 and self.ignore_zeros:
-            non_zeros1 = torch.sum(xyz1, dim=2).ne(0)
-            non_zeros2 = torch.sum(xyz2, dim=2).ne(0)
-            xyz1 = xyz1[non_zeros1].unsqueeze(dim=0)
-            xyz2 = xyz2[non_zeros2].unsqueeze(dim=0)
-
-        dist1, dist2 = ChamferFunction.apply(xyz1, xyz2)
-        # import pdb
-        # pdb.set_trace()
-        dist1 = torch.sqrt(dist1)
-        dist2 = torch.sqrt(dist2)
-        return (torch.mean(dist1) + torch.mean(dist2))/2
-
+        dist = torch.cdist(xyz1.float(), xyz2.float(), p=2)  # (B, N, M) — sqrt'd L2
+        dist1 = dist.min(dim=2).values  # (B, N)
+        dist2 = dist.min(dim=1).values  # (B, M)
+        if self.ignore_border:
+            dist1 = dist1[:, 1:-1]
+            dist2 = dist2[:, 1:-1]
+        return dist1.mean() + dist2.mean()

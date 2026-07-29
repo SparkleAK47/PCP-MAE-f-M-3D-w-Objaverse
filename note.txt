@@ -1,123 +1,69 @@
-# hybrid-with-objaverse（V1）
-
-CUDA_VISIBLE_DEVICES=0 python main.py --config cfgs/pretrain/base.yaml --exp_name pcpmae_minigpt3d
-
-CUDA_VISIBLE_DEVICES=0 python main.py --config cfgs/pretrain/base.yaml --exp_name pcpmae_minigpt3d --start_ckpts experiments/base/pretrain/pcpmae_minigpt3d/ckpt-last.pth
-
-
-# objaverse V2
-
-用 pointbert_mg 的 标准 PointTransformer trunk 替换 MaskTransformer（cross-attn）
+# [V1] PCP-MAE + MaskTransformer（Objaverse）
 
 CUDA_VISIBLE_DEVICES=0 python main.py \
-  --config cfgs/pretrain/base_minigpt_encoder.yaml \
+  --config cfgs/pretrain/\[V1\]PCP‑MAE+MaskTransformer.yaml \
+  --exp_name pcpmae_minigpt3d \
+  --seed 42
+
+CUDA_VISIBLE_DEVICES=0 python main.py \
+  --config cfgs/pretrain/\[V1\]PCP‑MAE+MaskTransformer.yaml \
+  --exp_name pcpmae_minigpt3d \
+  --start_ckpts experiments/\[V1\]PCP‑MAE+MaskTransformer/pretrain/pcpmae_minigpt3d/ckpt-last.pth
+
+继续训练：
+CUDA_VISIBLE_DEVICES=0 python main.py \
+  --config cfgs/pretrain/\[V1\]PCP‑MAE+MaskTransformer.yaml \
+  --exp_name pcpmae_minigpt3d \
+  --seed 42 \
+  --resume
+
+权重导出（V1 random，自动补 cls_token/cls_pos）：
+python ckpt_extract.py \
+  --ckpt experiments/\[V1\]PCP‑MAE+MaskTransformer/pretrain/pcpmae_minigpt3d/ckpt-best.pth \
+  --out point_model_pcpmae_random.pth
+
+
+# [V2] PCP-MAE + PointTransformer（Objaverse）
+
+CUDA_VISIBLE_DEVICES=0 python main.py \
+  --config cfgs/pretrain/\[V2\]PCP‑MAE+PointTransformer.yaml \
   --exp_name pcp_minigpt_encoder_objaverse \
   --seed 42
 
-继续训练
-  CUDA_VISIBLE_DEVICES=0 python main.py \
-  --config cfgs/pretrain/base_minigpt_encoder.yaml \
+继续训练：
+CUDA_VISIBLE_DEVICES=0 python main.py \
+  --config cfgs/pretrain/\[V2\]PCP‑MAE+PointTransformer.yaml \
   --exp_name pcp_minigpt_encoder_objaverse \
   --seed 42 \
   --resume
 
-复制预训练权重到：/data/datasets/PCP_checkpoint/minigpt_encoder/ckpt-last.pth
-
-权重导出脚本：
-python tools/export_minigpt_encoder.py \
-  --pcp-ckpt /data/datasets/PCP_checkpoint/minigpt_encoder/ckpt-last.pth \
+权重导出：
+python ckpt_extract.py \
+  --ckpt experiments/\[V2\]PCP‑MAE+PointTransformer/pretrain/pcp_minigpt_encoder_objaverse/ckpt-best.pth \
   --out /data/workspace/MiniGPT-3D/params_weight/pc_encoder/point_model_pcp_v2.pth
 
 
-# Point-MAE
+# Point-MAE + PointTransformer（Objaverse）
 
-第一阶段：预训练 Point-MAE
-
-cd /data/workspace/PCP-MAE_with_Objaverse
-
-# 对 660K 个 Objaverse 样本进行纯 Point-MAE（无中心预测）预训练
-# 单 GPU 训练，有效批次大小 64，300 epochs，bfloat16 AMP
 python main.py \
-    --config cfgs/pretrain/ablation_point_mae.yaml \
-    --exp_name point_mae_objaverse \
-    --seed 42
+  --config cfgs/pretrain/Point‑MAE+PointTransformer.yaml \
+  --exp_name point_mae_objaverse \
+  --seed 42
 
-# 训练将日志记录到：
-#   experiments/ablation_point_mae/pretrain/point_mae_objaverse/
-# 检查点将保存为：
-#   experiments/ablation_point_mae/pretrain/point_mae_objaverse/ckpt-best.pth
-#   experiments/ablation_point_mae/pretrain/point_mae_objaverse/ckpt-last.pth
-
-第二阶段：导出编码器权重
-训练完成后，提取骨干权重以适配 MiniGPT-3D：
-
-
-cd /data/workspace/PCP-MAE_with_Objaverse
-
-# 从最佳检查点提取仅编码器权重
+权重导出：
 python ckpt_extract.py \
-    --ckpt experiments/ablation_point_mae/pretrain/point_mae_objaverse/ckpt-last.pth \
-    --out point_model_pointmae.pth
-
-# 预期输出：
-#   [ok] Extracted 158 parameter tensors
-#   [ok] All 9 required keys present
-#   [info] Skipped N non-backbone keys (decoder, pred_head, mask_token, etc.)
-#   [ok] Saved -> point_model_pointmae.pth
+  --ckpt experiments/Point‑MAE+PointTransformer/pretrain/point_mae_objaverse/ckpt-best.pth \
+  --out point_model_pointmae.pth
 
 
+# Point-MAE + MaskTransformer（Objaverse）
 
-第一阶段：预训练 MaskTransformer Point-MAE
-
-cd /data/workspace/PCP-MAE_with_Objaverse
-
-# 在 660K 个 Objaverse 样本上训练带有 MaskTransformer（交叉注意力）编码器的 Point-MAE
-# 单 GPU，300 epochs，bfloat16 AMP
 python main.py \
-    --config cfgs/pretrain/ablation_mask_point_mae.yaml \
-    --exp_name mask_mae_objaverse \
-    --seed 42
+  --config cfgs/pretrain/Point‑MAE+MaskTransformer.yaml \
+  --exp_name mask_mae_objaverse \
+  --seed 42
 
-# 训练日志和检查点将被写入：
-#   experiments/ablation_mask_point_mae/pretrain/mask_mae_objaverse/
-预期训练时间： 与 PointTransformer 变体相似（在 8× A100 上约 2–3 天）。由于 MaskTransformer 的每个块处理 2 个序列（可见 + 被 mask 的），交叉注意力路径稍微重一些，但差异很小。
-
-第二阶段：导出编码器权重
-训练完成后，提取权重并在需要时生成 cls_token/cls_pos：
-
-
-cd /data/workspace/PCP-MAE_with_Objaverse
-
-# 从最佳检查点提取仅编码器权重
-# 脚本会自动检测到缺少 cls_token/cls_pos 并生成它们
+权重导出（自动补 cls_token/cls_pos）：
 python ckpt_extract.py \
-    --ckpt experiments/ablation_mask_point_mae/pretrain/mask_mae_objaverse/ckpt-best.pth \
-    --out point_model_maskmae.pth
-
-# 预期输出：
-#   [info] Auto-generated (trunc_normal init): cls_token, cls_pos
-#          This is expected for MaskTransformer checkpoints.
-#   [ok] Extracted 158 parameter tensors
-#   [ok] All 9 required keys present
-#   [info] Skipped N non-backbone keys (decoder, pred_head, mask_token, etc.)
-#   [ok] Saved -> point_model_maskmae.pth
-验证导出的文件：
-
-
-python -c "
-import torch
-ckpt = torch.load('point_model_maskmae.pth', map_location='cpu')
-sd = ckpt['base_model']
-required = ['cls_token','cls_pos','encoder.first_conv.0.weight',
-            'reduce_dim.weight','blocks.blocks.0.attn.qkv.weight',
-            'blocks.blocks.11.attn.qkv.weight','norm.weight']
-for k in required:
-    assert k in sd, f'Missing: {k}'
-    print(f'  ✓ {k}: {sd[k].shape}')
-print(f'Total keys: {len(sd)}')
-
-# Verify first_conv is 6-channel (Objaverse)
-assert sd['encoder.first_conv.0.weight'].shape[1] == 6, \
-    f'Expected 6 input channels, got {sd[\"encoder.first_conv.0.weight\"].shape[1]}'
-print('  ✓ first_conv input channels = 6 (XYZ+RGB, correct for Objaverse)')
-"
+  --ckpt experiments/Point‑MAE+MaskTransformer/pretrain/mask_mae_objaverse/ckpt-best.pth \
+  --out point_model_maskmae.pth

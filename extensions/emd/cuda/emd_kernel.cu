@@ -18,7 +18,7 @@
 #include <c10/cuda/CUDAException.h>
 
 
-#define CHECK_CUDA(x) TORCH_CHECK(x.type().is_cuda(), #x " must be a CUDA tensor")
+#define CHECK_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
@@ -192,8 +192,8 @@ at::Tensor ApproxMatchForward(
   CHECK_INPUT(xyz1);
   CHECK_INPUT(xyz2);
 
-  auto match = at::zeros({b, m, n}, xyz1.type());
-  auto temp = at::zeros({b, (n+m)*2}, xyz1.type());
+  auto match = at::zeros({b, m, n}, xyz1.options());
+  auto temp = at::zeros({b, (n+m)*2}, xyz1.options());
 
   AT_DISPATCH_FLOATING_TYPES(xyz1.scalar_type(), "ApproxMatchForward", ([&] {
         approxmatch<scalar_t><<<32,512>>>(b, n, m, xyz1.data<scalar_t>(), xyz2.data<scalar_t>(), match.data<scalar_t>(), temp.data<scalar_t>());
@@ -279,7 +279,7 @@ at::Tensor MatchCostForward(
   CHECK_INPUT(xyz1);
   CHECK_INPUT(xyz2);
 
-  auto cost = at::zeros({b}, xyz1.type());
+  auto cost = at::zeros({b}, xyz1.options());
 
   AT_DISPATCH_FLOATING_TYPES(xyz1.scalar_type(), "MatchCostForward", ([&] {
         matchcost<scalar_t><<<32,512>>>(b, n, m, xyz1.data<scalar_t>(), xyz2.data<scalar_t>(), match.data<scalar_t>(), cost.data<scalar_t>());
@@ -396,8 +396,8 @@ std::vector<at::Tensor> MatchCostBackward(
   CHECK_INPUT(xyz1);
   CHECK_INPUT(xyz2);
 
-  auto grad1 = at::zeros({b, n, 3}, xyz1.type());
-  auto grad2 = at::zeros({b, m, 3}, xyz1.type());
+  auto grad1 = at::zeros({b, n, 3}, xyz1.options());
+  auto grad2 = at::zeros({b, m, 3}, xyz1.options());
 
   AT_DISPATCH_FLOATING_TYPES(xyz1.scalar_type(), "MatchCostBackward", ([&] {
         matchcostgrad1<scalar_t><<<32,512>>>(b, n, m, grad_cost.data<scalar_t>(), xyz1.data<scalar_t>(), xyz2.data<scalar_t>(), match.data<scalar_t>(), grad1.data<scalar_t>());

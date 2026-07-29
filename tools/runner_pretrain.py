@@ -40,13 +40,49 @@ def evaluate_svm(train_features, train_labels, test_features, test_labels):
     pred = clf.predict(test_features)
     return np.sum(test_labels == pred) * 1. / pred.shape[0]
 
+
+@torch.no_grad()
+def validate_loss(base_model, val_dataloader, config, args, logger=None):
+    """
+    Compute the total validation loss (loss1 + ita * loss2) on the val set.
+    No data augmentation is applied.
+    Returns the average total loss over all val batches.
+    """
+    base_model.eval()
+    val_loss_total = AverageMeter()
+    n_batches = len(val_dataloader)
+    
+    for idx, (taxonomy_ids, model_ids, data) in enumerate(val_dataloader):
+        npoints = config.dataset.val.others.npoints
+        dataset_name = config.dataset.val._base_.NAME
+        if dataset_name == 'ObjaverseNPY':
+            points = data.cuda()
+        else:
+            raise NotImplementedError(f'Validation phase does not support {dataset_name}')
+        
+        assert points.size(1) == npoints
+        
+        # No data augmentation during validation
+        with autocast(dtype=torch.bfloat16):
+            loss1, loss2_weighted = base_model(points)
+            loss = loss1 + loss2_weighted
+        
+        if args.distributed:
+            loss = dist_utils.reduce_tensor(loss, args)
+        
+            val_loss_total.update(loss.item())
+    
+    base_model.train()
+    return val_loss_total.avg()
+
+
 def run_net(args, config, train_writer=None, val_writer=None):
     logger = get_logger(args.log_name)
     # build dataset
     config.dataset.train.others.whole = True    
     
     (train_sampler, train_dataloader), (_, test_dataloader),= builder.dataset_builder(args, config.dataset.train), \
-                                                            builder.dataset_builder(args, config.dataset.val)
+                                                                builder.dataset_builder(args, config.dataset.val)
     (_, extra_train_dataloader)  = builder.dataset_builder(args, config.dataset.extra_train) if config.dataset.get('extra_train') else (None, None)
     # build model
     base_model = builder.model_builder(config.model)
@@ -66,33 +102,39 @@ def run_net(args, config, train_writer=None, val_writer=None):
         ]
     )
     
-    # Calculate the number of parameters
-    # params = list(base_model.parameters())
-    # if True:
-    #     # k = sum(p.numel() for p in base_model.MAE_encoder.parameters() if p.requires_grad)
-    #     k = sum(p.numel() for p in base_model.parameters())
-    # else:
-    #     k = sum(p.numel() for p in base_model.MAE_encoder.parameters())
-    # print("all params:"+ str(k/1e6))  
-    # PCP-MAE 29.50 M
-    
     # parameter setting
     start_epoch = 0
     best_metrics = Acc_Metric(0.)
     metrics = Acc_Metric(0.)
 
+    # early stopping state
+    best_val_loss = float('inf')
+    best_val_loss_epoch = -1
+    patience_counter = 0
+    max_epoch = config.get('max_epoch', 75)
+    early_stop_patience = config.get('early_stopping', {}).get('patience', 5)
+    early_stop_triggered = False
+
     # resume ckpts
     if args.resume:
         start_epoch, best_metric = builder.resume_model(base_model, args, logger = logger)
         best_metrics = Acc_Metric(best_metric)
+        # Try to resume early stopping state
+        ckpt_path = os.path.join(args.experiment_path, 'ckpt-last.pth')
+        if os.path.exists(ckpt_path):
+            state_dict = torch.load(ckpt_path, map_location='cpu')
+            if 'best_val_loss' in state_dict:
+                best_val_loss = state_dict['best_val_loss']
+                best_val_loss_epoch = state_dict.get('best_val_loss_epoch', -1)
+                patience_counter = state_dict.get('patience_counter', 0)
+                print_log(f'[RESUME] Early stopping state restored: best_val_loss={best_val_loss:.6f} '
+                          f'@ epoch {best_val_loss_epoch}, patience={patience_counter}/{early_stop_patience}',
+                          logger=logger)
     elif args.start_ckpts is not None:
         builder.load_model(base_model, args.start_ckpts, logger = logger)
     
     if args.use_gpu:
         base_model.to(args.local_rank)
-
-    # if hasattr(torch, "compile"):
-    #     base_model = torch.compile(base_model, fullgraph=True, mode="max-autotune")
 
     # DDP
     if args.distributed:
@@ -114,7 +156,7 @@ def run_net(args, config, train_writer=None, val_writer=None):
 
     # training
     base_model.zero_grad()
-    for epoch in range(start_epoch, config.max_epoch + 1):
+    for epoch in range(start_epoch, max_epoch + 1):
         if args.distributed:
             train_sampler.set_epoch(epoch)
         base_model.train()
@@ -146,33 +188,13 @@ def run_net(args, config, train_writer=None, val_writer=None):
             
             assert points.size(1) == npoints
             
-            # points = train_transforms(points)
-            # loss1, loss2 = base_model(points)
-            # loss = loss1 + loss2    
-            
-            # try:
-            #     loss.backward()
-            #     # print("Using one GPU")
-            # except:
-            #     loss = loss.mean()
-            #     loss.backward()
-            #     # print("Using multi GPUs")
-
-            # if num_iter == config.step_per_update:
-            #     num_iter = 0
-            #     optimizer.step()
-            #     base_model.zero_grad()
             points = train_transforms(points)
 
             with autocast(dtype=torch.bfloat16):
                 loss1, loss2 = base_model(points)
                 loss = loss1 + loss2
 
-            try:
-                loss.backward()
-            except:
-                loss = loss.mean()
-                loss.backward()
+            loss.backward()
 
             if num_iter == config.step_per_update:
                 num_iter = 0
@@ -203,7 +225,7 @@ def run_net(args, config, train_writer=None, val_writer=None):
 
             if idx % 20 == 0:
                 print_log('[Epoch %d/%d][Batch %d/%d] BatchTime = %.3f (s) DataTime = %.3f (s) Losses = %s lr = %.6f' %
-                            (epoch, config.max_epoch, idx + 1, n_batches, batch_time.val(), data_time.val(),
+                            (epoch, max_epoch, idx + 1, n_batches, batch_time.val(), data_time.val(),
                             ['%.4f' % l for l in losses.val()], optimizer.param_groups[0]['lr']), logger = logger)
 
         if isinstance(scheduler, list):
@@ -215,25 +237,75 @@ def run_net(args, config, train_writer=None, val_writer=None):
 
         if train_writer is not None:
             train_writer.add_scalar('Loss/Epoch/Loss_1', losses.avg(0), epoch)
+            train_writer.add_scalar('Loss/Epoch/LR', optimizer.param_groups[0]['lr'], epoch)
         print_log('[Training] EPOCH: %d EpochTime = %.3f (s) Losses = %s lr = %.6f' %
             (epoch,  epoch_end_time - epoch_start_time, ['%.4f' % l for l in losses.avg()],
              optimizer.param_groups[0]['lr']), logger = logger)
 
-        # if epoch % args.val_freq == 0 and epoch != 0:
-        #     # Validate the current model
-        #     metrics = validate(base_model, extra_train_dataloader, test_dataloader, epoch, val_writer, args, config, logger=logger)
-        
-        #     # Save ckeckpoints
-        #     if metrics.better_than(best_metrics):
-        #         best_metrics = metrics
-        #         builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-best', args, logger = logger)
-        builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-last', args, logger = logger)
-        if epoch % 10 == 0:
+        # --- Validation loss monitoring ---
+        val_loss = validate_loss(base_model, test_dataloader, config, args, logger=logger)
+        print_log(f'[Validation] EPOCH: {epoch} val_total_loss = {val_loss:.6f}', logger=logger)
+
+        if val_writer is not None:
+            val_writer.add_scalar('Loss/Val/Total', val_loss, epoch)
+
+        # --- Early stopping check (rank 0 only) ---
+        if args.local_rank == 0:
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_val_loss_epoch = epoch
+                patience_counter = 0
+                # Save the best checkpoint (val total loss)
+                builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-best', args, logger=logger)
+                print_log(f'[Validation] New best val_loss={val_loss:.6f} @ epoch {epoch}. Saved ckpt-best.', logger=logger)
+            else:
+                patience_counter += 1
+                print_log(f'[Validation] val_loss did not improve. Patience: {patience_counter}/{early_stop_patience}', logger=logger)
+                if patience_counter >= early_stop_patience:
+                    early_stop_triggered = True
+                    print_log(f'[Early Stopping] Triggered after {epoch} epochs. Best val_loss={best_val_loss:.6f} @ epoch {best_val_loss_epoch}', logger=logger)
+
+        # Broadcast early_stop_triggered to all processes
+        if args.distributed:
+            early_stop_tensor = torch.tensor([1.0 if early_stop_triggered else 0.0], device=args.local_rank)
+            torch.distributed.broadcast(early_stop_tensor, src=0)
+            early_stop_triggered = early_stop_tensor.item() > 0.5
+
+        # --- Save ckpt-last with early stopping state ---
+        builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-last', args, logger=logger)
+        # Also save early stopping state into ckpt-last for resume compatibility
+        if args.local_rank == 0:
+            ckpt_last_path = os.path.join(args.experiment_path, 'ckpt-last.pth')
+            if os.path.exists(ckpt_last_path):
+                ckpt_data = torch.load(ckpt_last_path, map_location='cpu')
+                ckpt_data['best_val_loss'] = best_val_loss
+                ckpt_data['best_val_loss_epoch'] = best_val_loss_epoch
+                ckpt_data['patience_counter'] = patience_counter
+                torch.save(ckpt_data, ckpt_last_path)
+
+        # --- Save periodic checkpoint (skip early epochs) ---
+        if epoch % 10 == 0 and epoch >= 20:
             builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-epoch-{epoch:03d}', args,
                                     logger=logger)
-            # minigpt3d数据集更大，保存频率降低为每10个epoch保存一次
-        # if (config.max_epoch - epoch) < 10:
-        #     builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-epoch-{epoch:03d}', args, logger = logger)
+
+        # --- Early exit ---
+        if early_stop_triggered:
+            print_log(f'[Early Stopping] Stopping training. Rolling back to best checkpoint from epoch {best_val_loss_epoch}.', logger=logger)
+            # Roll back: load the best checkpoint into base_model
+            if args.local_rank == 0:
+                best_ckpt_path = os.path.join(args.experiment_path, 'ckpt-best.pth')
+                if os.path.exists(best_ckpt_path):
+                    best_state = torch.load(best_ckpt_path, map_location='cpu')
+                    base_ckpt = {k.replace("module.", ""): v for k, v in best_state['base_model'].items()}
+                    if args.distributed:
+                        base_model.module.load_state_dict(base_ckpt, strict=True)
+                    else:
+                        base_model.load_state_dict(base_ckpt, strict=True)
+                    print_log(f'[Early Stopping] Rolled back to best checkpoint @ epoch {best_val_loss_epoch}.', logger=logger)
+                    # Save the best weights as final ckpt-last
+                    builder.save_checkpoint(base_model, optimizer, best_val_loss_epoch, metrics, best_metrics, 'ckpt-last', args, logger=logger)
+            break
+
     if train_writer is not None:
         train_writer.close()
     if val_writer is not None:
