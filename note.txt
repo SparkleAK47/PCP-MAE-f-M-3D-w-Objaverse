@@ -19,7 +19,7 @@ CUDA_VISIBLE_DEVICES=0 python main.py \
 
 权重导出（V1 random，自动补 cls_token/cls_pos）：
 python ckpt_extract.py \
-  --ckpt experiments/\[V1\]PCP‑MAE+MaskTransformer/pretrain/pcpmae_minigpt3d/ckpt-best.pth \
+  --ckpt "experiments/[V1]PCP‑MAE+MaskTransformer/pretrain/pcpmae_minigpt3d/ckpt-best.pth" \
   --out point_model_pcpmae_random.pth
 
 
@@ -39,7 +39,7 @@ CUDA_VISIBLE_DEVICES=0 python main.py \
 
 权重导出：
 python ckpt_extract.py \
-  --ckpt experiments/\[V2\]PCP‑MAE+PointTransformer/pretrain/pcp_minigpt_encoder_objaverse/ckpt-best.pth \
+  --ckpt "experiments/[V2]PCP‑MAE+PointTransformer/pretrain/pcp_minigpt_encoder_objaverse/ckpt-best.pth" \
   --out /data/workspace/MiniGPT-3D/params_weight/pc_encoder/point_model_pcp_v2.pth
 
 
@@ -52,7 +52,7 @@ python main.py \
 
 权重导出：
 python ckpt_extract.py \
-  --ckpt experiments/Point‑MAE+PointTransformer/pretrain/point_mae_objaverse/ckpt-best.pth \
+  --ckpt "experiments/Point‑MAE+PointTransformer/pretrain/point_mae_objaverse/ckpt-best.pth" \
   --out point_model_pointmae.pth
 
 
@@ -65,5 +65,5 @@ python main.py \
 
 权重导出（自动补 cls_token/cls_pos）：
 python ckpt_extract.py \
-  --ckpt experiments/Point‑MAE+MaskTransformer/pretrain/mask_mae_objaverse/ckpt-best.pth \
+  --ckpt "experiments/Point‑MAE+MaskTransformer/pretrain/mask_mae_objaverse/ckpt-best.pth" \
   --out point_model_maskmae.pth

@@ -169,7 +169,7 @@ def run_net(args, config, train_writer=None, val_writer=None):
             if train_writer is not None:
                 train_writer.add_scalar('Loss/Batch/Loss', loss.item(), n_itr)
                 train_writer.add_scalar('Loss/Batch/TrainAcc', acc.item(), n_itr)
-                train_writer.add_scalar('Loss/Batch/LR', optimizer.param_groups[0]['lr'], n_itr)
+                train_writer.add_scalar('Loss/Batch/LR', optimizer.param_groups[1]['lr'], n_itr)
 
 
             batch_time.update(time.time() - batch_start_time)
@@ -190,7 +190,7 @@ def run_net(args, config, train_writer=None, val_writer=None):
             train_writer.add_scalar('Loss/Epoch/Loss', losses.avg(0), epoch)
 
         print_log('[Training] EPOCH: %d EpochTime = %.3f (s) Losses = %s lr = %.6f' %
-            (epoch,  epoch_end_time - epoch_start_time, ['%.4f' % l for l in losses.avg()],optimizer.param_groups[0]['lr']), logger = logger)
+            (epoch,  epoch_end_time - epoch_start_time, ['%.4f' % l for l in losses.avg()],optimizer.param_groups[1]['lr']), logger = logger)
 
         
         if epoch % args.val_freq == 0 and epoch != 0:

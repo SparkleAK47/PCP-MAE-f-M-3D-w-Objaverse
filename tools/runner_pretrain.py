@@ -107,29 +107,20 @@ def run_net(args, config, train_writer=None, val_writer=None):
     best_metrics = Acc_Metric(0.)
     metrics = Acc_Metric(0.)
 
-    # early stopping state
     best_val_loss = float('inf')
-    best_val_loss_epoch = -1
-    patience_counter = 0
     max_epoch = config.get('max_epoch', 75)
-    early_stop_patience = config.get('early_stopping', {}).get('patience', 5)
-    early_stop_triggered = False
 
     # resume ckpts
     if args.resume:
         start_epoch, best_metric = builder.resume_model(base_model, args, logger = logger)
         best_metrics = Acc_Metric(best_metric)
-        # Try to resume early stopping state
+        # Try to resume best_val_loss
         ckpt_path = os.path.join(args.experiment_path, 'ckpt-last.pth')
         if os.path.exists(ckpt_path):
             state_dict = torch.load(ckpt_path, map_location='cpu')
             if 'best_val_loss' in state_dict:
                 best_val_loss = state_dict['best_val_loss']
-                best_val_loss_epoch = state_dict.get('best_val_loss_epoch', -1)
-                patience_counter = state_dict.get('patience_counter', 0)
-                print_log(f'[RESUME] Early stopping state restored: best_val_loss={best_val_loss:.6f} '
-                          f'@ epoch {best_val_loss_epoch}, patience={patience_counter}/{early_stop_patience}',
-                          logger=logger)
+                print_log(f'[RESUME] Best val_loss restored: {best_val_loss:.6f}', logger=logger)
     elif args.start_ckpts is not None:
         builder.load_model(base_model, args.start_ckpts, logger = logger)
     
@@ -217,7 +208,7 @@ def run_net(args, config, train_writer=None, val_writer=None):
 
             if train_writer is not None:
                 train_writer.add_scalar('Loss/Batch/Loss', loss.item(), n_itr)
-                train_writer.add_scalar('Loss/Batch/LR', optimizer.param_groups[0]['lr'], n_itr)
+                train_writer.add_scalar('Loss/Batch/LR', optimizer.param_groups[1]['lr'], n_itr)
 
 
             batch_time.update(time.time() - batch_start_time)
@@ -226,7 +217,7 @@ def run_net(args, config, train_writer=None, val_writer=None):
             if idx % 20 == 0:
                 print_log('[Epoch %d/%d][Batch %d/%d] BatchTime = %.3f (s) DataTime = %.3f (s) Losses = %s lr = %.6f' %
                             (epoch, max_epoch, idx + 1, n_batches, batch_time.val(), data_time.val(),
-                            ['%.4f' % l for l in losses.val()], optimizer.param_groups[0]['lr']), logger = logger)
+                            ['%.4f' % l for l in losses.val()], optimizer.param_groups[1]['lr']), logger = logger)
 
         if isinstance(scheduler, list):
             for item in scheduler:
@@ -237,75 +228,38 @@ def run_net(args, config, train_writer=None, val_writer=None):
 
         if train_writer is not None:
             train_writer.add_scalar('Loss/Epoch/Loss_1', losses.avg(0), epoch)
-            train_writer.add_scalar('Loss/Epoch/LR', optimizer.param_groups[0]['lr'], epoch)
+            train_writer.add_scalar('Loss/Epoch/LR', optimizer.param_groups[1]['lr'], epoch)
         print_log('[Training] EPOCH: %d EpochTime = %.3f (s) Losses = %s lr = %.6f' %
             (epoch,  epoch_end_time - epoch_start_time, ['%.4f' % l for l in losses.avg()],
-             optimizer.param_groups[0]['lr']), logger = logger)
+             optimizer.param_groups[1]['lr']), logger = logger)
 
-        # --- Validation loss monitoring ---
+        # --- Validation loss monitoring (no early stopping) ---
         val_loss = validate_loss(base_model, test_dataloader, config, args, logger=logger)
         print_log(f'[Validation] EPOCH: {epoch} val_total_loss = {val_loss:.6f}', logger=logger)
 
         if val_writer is not None:
             val_writer.add_scalar('Loss/Val/Total', val_loss, epoch)
 
-        # --- Early stopping check (rank 0 only) ---
-        if args.local_rank == 0:
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                best_val_loss_epoch = epoch
-                patience_counter = 0
-                # Save the best checkpoint (val total loss)
+        # Track best val loss and save best checkpoint
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            if args.local_rank == 0:
                 builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-best', args, logger=logger)
                 print_log(f'[Validation] New best val_loss={val_loss:.6f} @ epoch {epoch}. Saved ckpt-best.', logger=logger)
-            else:
-                patience_counter += 1
-                print_log(f'[Validation] val_loss did not improve. Patience: {patience_counter}/{early_stop_patience}', logger=logger)
-                if patience_counter >= early_stop_patience:
-                    early_stop_triggered = True
-                    print_log(f'[Early Stopping] Triggered after {epoch} epochs. Best val_loss={best_val_loss:.6f} @ epoch {best_val_loss_epoch}', logger=logger)
 
-        # Broadcast early_stop_triggered to all processes
-        if args.distributed:
-            early_stop_tensor = torch.tensor([1.0 if early_stop_triggered else 0.0], device=args.local_rank)
-            torch.distributed.broadcast(early_stop_tensor, src=0)
-            early_stop_triggered = early_stop_tensor.item() > 0.5
-
-        # --- Save ckpt-last with early stopping state ---
+        # Save ckpt-last
         builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-last', args, logger=logger)
-        # Also save early stopping state into ckpt-last for resume compatibility
         if args.local_rank == 0:
             ckpt_last_path = os.path.join(args.experiment_path, 'ckpt-last.pth')
             if os.path.exists(ckpt_last_path):
                 ckpt_data = torch.load(ckpt_last_path, map_location='cpu')
                 ckpt_data['best_val_loss'] = best_val_loss
-                ckpt_data['best_val_loss_epoch'] = best_val_loss_epoch
-                ckpt_data['patience_counter'] = patience_counter
                 torch.save(ckpt_data, ckpt_last_path)
 
-        # --- Save periodic checkpoint (skip early epochs) ---
-        if epoch % 10 == 0 and epoch >= 20:
+        # Save periodic checkpoint
+        if epoch % 10 == 0:
             builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-epoch-{epoch:03d}', args,
                                     logger=logger)
-
-        # --- Early exit ---
-        if early_stop_triggered:
-            print_log(f'[Early Stopping] Stopping training. Rolling back to best checkpoint from epoch {best_val_loss_epoch}.', logger=logger)
-            # Roll back: load the best checkpoint into base_model
-            if args.local_rank == 0:
-                best_ckpt_path = os.path.join(args.experiment_path, 'ckpt-best.pth')
-                if os.path.exists(best_ckpt_path):
-                    best_state = torch.load(best_ckpt_path, map_location='cpu')
-                    if args.distributed:
-                        base_ckpt = {k.replace("module.", ""): v for k, v in best_state['base_model'].items()}
-                        base_model.module.load_state_dict(base_ckpt, strict=True)
-                    else:
-                        base_ckpt = best_state['base_model']
-                        base_model.load_state_dict(base_ckpt, strict=True)
-                    print_log(f'[Early Stopping] Rolled back to best checkpoint @ epoch {best_val_loss_epoch}.', logger=logger)
-                    # Save the best weights as final ckpt-last
-                    builder.save_checkpoint(base_model, optimizer, best_val_loss_epoch, metrics, best_metrics, 'ckpt-last', args, logger=logger)
-            break
 
     if train_writer is not None:
         train_writer.close()
