@@ -1,3 +1,8 @@
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+# 环境: conda activate mae5090（RTX 5090）; 历史环境见 README §1.2（pcpmae / RTX 3090）
+# 训练策略: 不使用早停; Objaverse 建议 max_epoch >= 100（当前 configs 为 30, 见 README §5.3）
+
 # [V1] PCP-MAE + MaskTransformer（Objaverse）
 
 CUDA_VISIBLE_DEVICES=0 python main.py \
@@ -20,7 +25,8 @@ CUDA_VISIBLE_DEVICES=0 python main.py \
 权重导出（V1 random，自动补 cls_token/cls_pos）：
 python ckpt_extract.py \
   --ckpt "experiments/[V1]PCP‑MAE+MaskTransformer/pretrain/pcpmae_minigpt3d/ckpt-best.pth" \
-  --out point_model_pcpmae_random.pth
+  --out point_model_V1+random-cls.pth
+cp point_model_V1+random-cls.pth /data/workspace/MiniGPT-3D/params_weight/pc_encoder/
 
 
 # [V2] PCP-MAE + PointTransformer（Objaverse）
@@ -40,7 +46,7 @@ CUDA_VISIBLE_DEVICES=0 python main.py \
 权重导出：
 python ckpt_extract.py \
   --ckpt "experiments/[V2]PCP‑MAE+PointTransformer/pretrain/pcp_minigpt_encoder_objaverse/ckpt-best.pth" \
-  --out /data/workspace/MiniGPT-3D/params_weight/pc_encoder/point_model_pcp_v2.pth
+  --out /data/workspace/MiniGPT-3D/params_weight/pc_encoder/point_model_v2.pth
 
 
 # Point-MAE + PointTransformer（Objaverse）
@@ -54,6 +60,7 @@ python main.py \
 python ckpt_extract.py \
   --ckpt "experiments/Point‑MAE+PointTransformer/pretrain/point_mae_objaverse/ckpt-best.pth" \
   --out point_model_pointmae.pth
+# 已导出权重归档: /data/workspace/MiniGPT-3D/params_weight/pc_encoder/old/point_model_pointmae.pth
 
 
 # Point-MAE + MaskTransformer（Objaverse）
@@ -67,3 +74,4 @@ python main.py \
 python ckpt_extract.py \
   --ckpt "experiments/Point‑MAE+MaskTransformer/pretrain/mask_mae_objaverse/ckpt-best.pth" \
   --out point_model_maskmae.pth
+# 已导出权重归档: /data/workspace/MiniGPT-3D/params_weight/pc_encoder/old/point_model_maskmae.pth

@@ -17,14 +17,13 @@ python --version
 which python
 
 echo ""
-echo "========== 第2步：安装 PyTorch 2.13 + CUDA 12.8（RTX 5090 Blackwell 支持）=========="
+echo "========== 第2步：安装 PyTorch 2.13 + CUDA 13.0（RTX 5090 Blackwell 支持）=========="
 echo "RTX 5090 (Blackwell sm_120) 需要 PyTorch 2.13+。"
-echo "下载约 2.6GB，需 20-40 分钟。建议手动执行："
-echo ""
-echo "pip install torch==2.13.0 torchvision==0.24.0 --index-url https://download.pytorch.org/whl/cu128"
-echo ""
-echo "如果仍报 'no kernel image' 错误，改用 cu124 试试："
-echo "pip install torch==2.13.0 torchvision==0.24.0 --index-url https://download.pytorch.org/whl/cu124"
+echo "实际已安装版本: torch 2.13.0+cu130 / torchvision 0.28.0+cu130（下载约 2.6GB，需 20-40 分钟）"
+echo "建议手动执行（主命令，cu130）："
+echo "pip install torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cu130"
+echo "如果仍报 'no kernel image' 错误，改用 cu128 试试："
+echo "pip install torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cu128"
 echo ""
 read -p "PyTorch 安装完成后按 Enter 继续..."
 

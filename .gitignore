@@ -169,4 +169,3 @@ datasets/*
 # others
 output.txt
 test.py
-ckpt_extract.py
